@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchPubMed } from "@/lib/pubmed";
+import { searchGeoDatasets } from "@/lib/geo";
 import type { Paper } from "@/types/paper";
+import type { Dataset } from "@/types/dataset";
 
-// TODO: GEO integration         — query NCBI GEO DataSets API for expression datasets
-// TODO: SRA integration         — query NCBI SRA for raw sequencing data
-// TODO: ArrayExpress integration — query EBI ArrayExpress for transcriptomics experiments
-// TODO: Europe PMC integration  — supplement PubMed with Europe PMC full-text search
+// TODO: SRA integration         — NCBI SRA for raw sequencing runs linked to GSE accessions
+// TODO: ArrayExpress integration — EBI ArrayExpress for European transcriptomics datasets
+// TODO: TCGA integration        — NCI GDC portal for cancer genomics cohort data
+// TODO: Europe PMC integration  — full-text search to supplement PubMed coverage
 // TODO: AI reasoning layer      — use OpenAI GPT-4 to generate landscape, emergingAreas,
-//                                  researchGaps, and projects from the query + paper abstracts
+//                                  researchGaps, and projects from query + paper abstracts
+// TODO: Keyword extraction      — cluster PubMed MeSH terms + GEO metadata for topics
+// TODO: RAG support             — retrieve semantically similar papers + datasets
+// TODO: Vector embeddings       — embed abstracts + dataset summaries for similarity search
 
 interface AnalyzeRequest {
   query: string;
@@ -18,7 +23,7 @@ interface AnalyzeResponse {
   emergingAreas: string[];
   researchGaps: string[];
   projects: string[];
-  datasets: string[];
+  datasets: Dataset[];
   papers: Paper[];
 }
 
@@ -34,10 +39,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const query = body.query.trim();
 
-  // Live PubMed pipeline: ESearch → ESummary + EFetch (parallel) → Paper[]
-  const papers = await searchPubMed(query);
+  // PubMed and GEO run concurrently — neither depends on the other
+  const [papers, datasets] = await Promise.all([
+    searchPubMed(query),     // ESearch → ESummary + EFetch (parallel) → Paper[]
+    searchGeoDatasets(query), // ESearch → ESummary → Dataset[]
+  ]);
 
-  // Mock data — will be replaced by OpenAI + GEO/SRA/ArrayExpress API calls
+  // Mock data — will be replaced by OpenAI reasoning over papers + datasets
   const result: AnalyzeResponse = {
     landscape: [
       "Transcriptomics",
@@ -59,11 +67,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       "Machine learning classification system",
       "Multi-omics biomarker prediction",
     ],
-    datasets: [
-      "TCGA-BRCA",
-      "GEO GSE12345",
-      "ArrayExpress E-MTAB-5678",
-    ],
+    datasets,
     papers,
   };
 

@@ -1,0 +1,271 @@
+PHASE 2 — MAKE GEO ROCK-SOLID
+
+Goal:
+
+Create a production-ready GEO subsystem for ResearchCoPilot.
+
+IMPORTANT:
+
+* Preserve PubMed functionality.
+* Do not modify SearchForm.
+* Do not introduce AI.
+* Maintain TypeScript compatibility.
+* Support any life science topic.
+* Never crash.
+* Return empty arrays on failure.
+
+================================================
+
+STEP 1
+
+Create:
+
+types/dataset.ts
+
+Interface:
+
+export interface Dataset {
+
+accession:string
+
+title:string
+
+organism:string
+
+platform:string
+
+sampleCount?:number
+
+summary?:string
+
+geoUrl?:string
+
+}
+
+Add JSDoc comments.
+
+================================================
+
+STEP 2
+
+Create:
+
+lib/geo/
+
+search.ts
+
+summary.ts
+
+parser.ts
+
+index.ts
+
+================================================
+
+STEP 3
+
+search.ts
+
+Implement:
+
+searchGeoIds(query:string)
+
+Purpose:
+
+Search GEO and return top 10 GEO accessions.
+
+Return:
+
+string[]
+
+Return [] on failure.
+
+================================================
+
+STEP 4
+
+summary.ts
+
+Fetch metadata for GEO accessions.
+
+Retrieve:
+
+title
+
+organism
+
+platform
+
+summary
+
+sample count
+
+Return raw GEO metadata.
+
+================================================
+
+STEP 5
+
+parser.ts
+
+Convert GEO responses into Dataset[].
+
+Populate:
+
+accession
+
+title
+
+organism
+
+platform
+
+sampleCount
+
+summary
+
+geoUrl
+
+geoUrl format:
+
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}
+
+Handle missing values safely.
+
+================================================
+
+STEP 6
+
+index.ts
+
+Export:
+
+searchGeoDatasets(query:string)
+
+Pipeline:
+
+query
+
+↓
+
+searchGeoIds()
+
+↓
+
+fetchGeoSummaries()
+
+↓
+
+parseGeoResults()
+
+↓
+
+Dataset[]
+
+================================================
+
+STEP 7
+
+Update:
+
+app/api/analyze/route.ts
+
+Import:
+
+searchGeoDatasets()
+
+Import:
+
+Dataset
+
+Extend AnalyzeResponse:
+
+datasets: Dataset[]
+
+Replace static dataset recommendations with real GEO datasets.
+
+Preserve papers.
+
+================================================
+
+STEP 8
+
+Update ResultsContent.tsx
+
+Dataset Recommendations should show:
+
+Dataset title
+
+GSE accession
+
+Organism
+
+Platform
+
+Sample count
+
+Summary preview
+
+GEO link
+
+Preserve dark mode and current styling.
+
+================================================
+
+STEP 9
+
+Performance
+
+Limit to top 10 datasets.
+
+Avoid duplicate requests.
+
+Return [] on failures.
+
+================================================
+
+STEP 10
+
+Add TODO comments:
+
+SRA integration
+
+ArrayExpress integration
+
+TCGA integration
+
+EuropePMC
+
+AI layer
+
+Keyword extraction
+
+RAG
+
+Vector embeddings
+
+================================================
+
+FINAL GOAL
+
+ResearchCoPilot should support:
+
+User Query
+
+↓
+
+PubMed
+
+↓
+
+Related Papers
+
+↓
+
+GEO
+
+↓
+
+Dataset Recommendations
+
+without using AI.
