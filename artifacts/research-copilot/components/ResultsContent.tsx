@@ -3,22 +3,39 @@
 import { useSearchParams, useRouter } from "next/navigation";
 import { useState, FormEvent } from "react";
 
+// Section 1: Research Landscape — will be populated by PubMed API (MeSH terms + topic clustering)
+const PLACEHOLDER_LANDSCAPE = [
+  "Transcriptomics",
+  "Biomarker Discovery",
+  "Machine Learning",
+];
+
+// Section 2: Emerging Areas — will be populated by PubMed API (trend analysis on recent publications)
+const PLACEHOLDER_EMERGING = [
+  "Multi-omics integration",
+  "AI-assisted biomarker prediction",
+  "Single-cell transcriptomics",
+];
+
+// Section 3: Research Gaps — will be populated by OpenAI API (gap analysis from literature)
 const PLACEHOLDER_GAPS = [
-  "Long-term safety profiling of base editing in primary neurons",
-  "Role of off-target DSBs in edited stem cell differentiation potential",
-  "Population-level variation in CRISPR delivery efficiency",
+  "Limited South Asian cohorts",
+  "Lack of longitudinal validation studies",
+  "Insufficient multi-omics datasets",
 ];
 
+// Section 4: Suggested Projects — will be populated by OpenAI API (project ideation from gaps)
+const PLACEHOLDER_PROJECTS = [
+  "Multi-omics biomarker prediction model",
+  "RNA-Seq meta-analysis pipeline",
+  "Machine learning classification system",
+];
+
+// Section 5: Dataset Recommendations — will be populated by PubMed/GEO API (dataset search)
 const PLACEHOLDER_DATASETS = [
-  { name: "GEO GSE12345", desc: "RNA-seq from CRISPR-edited iPSC neurons", source: "NCBI GEO" },
-  { name: "UniProt – Cas9 variants", desc: "Structural and functional annotations", source: "UniProt" },
-  { name: "dbSNP off-target loci", desc: "Common SNPs near predicted off-target sites", source: "NCBI dbSNP" },
-];
-
-const PLACEHOLDER_IDEAS = [
-  "Develop a ML model to predict CRISPR off-target effects using epigenomic features",
-  "Systematic comparison of BE3 vs. ABE8e efficiency across 50 neuronal cell lines",
-  "Single-cell transcriptomic atlas of CRISPR-corrected Parkinson's patient iPSCs",
+  "GEO GSE12345 — RNA-seq breast cancer data",
+  "TCGA-BRCA — Breast cancer cohort",
+  "ArrayExpress E-MTAB-5678",
 ];
 
 export default function ResultsContent() {
@@ -71,7 +88,21 @@ export default function ResultsContent() {
       </div>
 
       {q ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+          <ResultSection
+            icon="🧬"
+            title="Research Landscape"
+            color="blue"
+            items={PLACEHOLDER_LANDSCAPE}
+            itemType="topic"
+          />
+          <ResultSection
+            icon="🚀"
+            title="Emerging Areas"
+            color="purple"
+            items={PLACEHOLDER_EMERGING}
+            itemType="area"
+          />
           <ResultSection
             icon="🔍"
             title="Research Gaps"
@@ -80,18 +111,18 @@ export default function ResultsContent() {
             itemType="gap"
           />
           <ResultSection
-            icon="🗄️"
-            title="Public Datasets"
-            color="violet"
-            items={PLACEHOLDER_DATASETS.map((d) => `${d.name} — ${d.desc} (${d.source})`)}
-            itemType="dataset"
+            icon="💡"
+            title="Suggested Projects"
+            color="emerald"
+            items={PLACEHOLDER_PROJECTS}
+            itemType="project"
           />
           <ResultSection
-            icon="💡"
-            title="Project Ideas"
-            color="emerald"
-            items={PLACEHOLDER_IDEAS}
-            itemType="idea"
+            icon="🗄️"
+            title="Dataset Recommendations"
+            color="violet"
+            items={PLACEHOLDER_DATASETS}
+            itemType="dataset"
           />
         </div>
       ) : (
@@ -124,25 +155,35 @@ function ResultSection({
 }: {
   icon: string;
   title: string;
-  color: "indigo" | "violet" | "emerald";
+  color: "blue" | "purple" | "indigo" | "emerald" | "violet";
   items: string[];
   itemType: string;
 }) {
   const colorMap = {
+    blue: {
+      header: "bg-blue-600",
+      badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+      bullet: "bg-blue-500",
+    },
+    purple: {
+      header: "bg-purple-600",
+      badge: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+      bullet: "bg-purple-500",
+    },
     indigo: {
       header: "bg-indigo-600",
       badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
       bullet: "bg-indigo-500",
     },
-    violet: {
-      header: "bg-violet-600",
-      badge: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
-      bullet: "bg-violet-500",
-    },
     emerald: {
       header: "bg-emerald-600",
       badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
       bullet: "bg-emerald-500",
+    },
+    violet: {
+      header: "bg-violet-600",
+      badge: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
+      bullet: "bg-violet-500",
     },
   };
 
