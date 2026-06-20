@@ -1,8 +1,8 @@
-// File: /home/runner/workspace/artifacts/research-copilot/app/api/analyze/route.ts
-import * as entry from '../../../../../app/api/analyze/route.js'
+// File: /home/runner/workspace/artifacts/research-copilot/app/api/pubmed-test/route.ts
+import * as entry from '../../../../../app/api/pubmed-test/route.js'
 import type { NextRequest } from 'next/server.js'
 
-type TEntry = typeof import('../../../../../app/api/analyze/route.js')
+type TEntry = typeof import('../../../../../app/api/pubmed-test/route.js')
 
 type SegmentParams<T extends Object = any> = T extends Record<string, any>
   ? { [K in keyof T]: T[K] extends string ? string | string[] | undefined : never }

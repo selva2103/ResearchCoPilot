@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = ["/", "/api/analyze"]
+paths = ["/", "/api/analyze", "/api/pubmed-test"]
 localPort = 20891
 
 [services.development]
