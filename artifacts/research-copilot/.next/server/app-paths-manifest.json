@@ -1,4 +1,5 @@
 {
-  "/api/pubmed-test/route": "app/api/pubmed-test/route.js",
-  "/page": "app/page.js"
+  "/api/analyze/route": "app/api/analyze/route.js",
+  "/page": "app/page.js",
+  "/results/page": "app/results/page.js"
 }

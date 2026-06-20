@@ -11,10 +11,15 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
-    "/api/pubmed-test/route": [
+    "/results/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/pubmed-test/route.js"
+      "static/chunks/app/results/page.js"
+    ],
+    "/api/analyze/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/analyze/route.js"
     ]
   }
 }

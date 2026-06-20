@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { searchPubMed } from "@/lib/pubmed";
+import type { Paper } from "@/types/paper";
 
-// TypeScript types for the request and response
+// TODO: GEO datasets      — query NCBI GEO DataSets API for relevant expression datasets
+// TODO: SRA datasets      — query NCBI SRA for raw sequencing data linked to the topic
+// TODO: Europe PMC        — supplement PubMed results with Europe PMC full-text search
+// TODO: AI reasoning layer — use OpenAI GPT-4 to generate landscape, emergingAreas,
+//                            researchGaps, and projects based on the query + paper abstracts
+
 interface AnalyzeRequest {
   query: string;
 }
@@ -11,13 +18,8 @@ interface AnalyzeResponse {
   researchGaps: string[];
   projects: string[];
   datasets: string[];
+  papers: Paper[];
 }
-
-// TODO: Replace mock data with OpenAI API integration (GPT-4) to generate
-// landscape, emergingAreas, researchGaps, and projects based on the query.
-
-// TODO: Replace mock datasets with PubMed/GEO API integration to fetch
-// real public datasets relevant to the query topic.
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json()) as AnalyzeRequest;
@@ -29,7 +31,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Mock response — will be replaced by OpenAI + PubMed API calls
+  const query = body.query.trim();
+
+  // Fetch real PubMed papers for the query — returns [] on failure
+  const papers = await searchPubMed(query);
+
+  // Mock data for non-paper sections — will be replaced by OpenAI + GEO/SRA API calls
   const result: AnalyzeResponse = {
     landscape: [
       "Transcriptomics",
@@ -56,6 +63,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       "GEO GSE12345",
       "ArrayExpress E-MTAB-5678",
     ],
+    papers,
   };
 
   return NextResponse.json(result, { status: 200 });
