@@ -1,0 +1,342 @@
+PHASE 1 — MAKE PUBMED ROCK-SOLID
+
+Goal:
+Refactor PubMed integration into a production-ready subsystem for ResearchCoPilot.
+
+IMPORTANT RULES
+
+* Preserve existing functionality.
+* Do not modify SearchForm.tsx.
+* Do not modify routing.
+* Do not introduce OpenAI.
+* Do not add authentication.
+* Do not add databases.
+* Keep everything domain-independent.
+* Maintain TypeScript compatibility.
+* Never throw uncaught exceptions.
+* Return empty arrays instead of crashing.
+
+==================================================
+STEP 1 — UPGRADE PAPER MODEL
+============================
+
+Update:
+
+types/paper.ts
+
+Current fields:
+
+pmid: string
+title: string
+authors: string[]
+journal: string
+year: string
+
+Add optional fields:
+
+doi?: string
+abstract?: string
+meshTerms?: string[]
+keywords?: string[]
+publicationTypes?: string[]
+pubmedUrl?: string
+
+Add JSDoc comments describing each field.
+
+==================================================
+STEP 2 — CREATE MODULAR PUBMED FOLDER
+=====================================
+
+Create:
+
+lib/pubmed/
+
+search.ts
+summary.ts
+abstract.ts
+mesh.ts
+parser.ts
+index.ts
+
+==================================================
+STEP 3 — IMPLEMENT search.ts
+============================
+
+Purpose:
+
+Handle PubMed ESearch API.
+
+Export:
+
+async function searchPubMedIds(query:string): Promise<string[]>
+
+Responsibilities:
+
+* Search PubMed.
+* Return top 10 PMIDs.
+* Sort by relevance.
+* Return [] on failure.
+
+Add comments explaining ESearch.
+
+==================================================
+STEP 4 — IMPLEMENT summary.ts
+=============================
+
+Purpose:
+
+Handle PubMed ESummary API.
+
+Export:
+
+async function fetchPaperSummaries(pmids:string)
+
+Responsibilities:
+
+* Fetch metadata.
+* Return raw summary data.
+* Handle errors gracefully.
+
+Add comments explaining ESummary.
+
+==================================================
+STEP 5 — IMPLEMENT abstract.ts
+==============================
+
+Purpose:
+
+Handle PubMed EFetch API.
+
+Export:
+
+async function fetchPaperAbstracts(pmids:string)
+
+Responsibilities:
+
+Retrieve:
+
+* Abstract text
+* DOI
+* Publication types
+
+Return empty object on failure.
+
+Add comments explaining EFetch.
+
+==================================================
+STEP 6 — IMPLEMENT mesh.ts
+==========================
+
+Purpose:
+
+Extract MeSH terms from EFetch responses.
+
+Export:
+
+function extractMeshTerms(xmlData:string): string[]
+
+Return:
+
+string[]
+
+Return [] if unavailable.
+
+==================================================
+STEP 7 — IMPLEMENT parser.ts
+============================
+
+Purpose:
+
+Convert raw PubMed responses into Paper objects.
+
+Export:
+
+function parsePubMedResults(
+summaryData,
+abstractData
+): Paper[]
+
+Populate:
+
+pmid
+title
+authors
+journal
+year
+doi
+abstract
+meshTerms
+publicationTypes
+pubmedUrl
+
+pubmedUrl format:
+
+https://pubmed.ncbi.nlm.nih.gov/{pmid}/
+
+Handle missing values safely.
+
+==================================================
+STEP 8 — IMPLEMENT index.ts
+===========================
+
+Export:
+
+async function searchPubMed(query:string): Promise<Paper[]>
+
+Pipeline:
+
+query
+↓
+searchPubMedIds()
+↓
+fetchPaperSummaries()
+↓
+fetchPaperAbstracts()
+↓
+parsePubMedResults()
+↓
+Paper[]
+
+Use async/await.
+
+Return [] on failure.
+
+==================================================
+STEP 9 — UPDATE app/api/analyze/route.ts
+========================================
+
+Import:
+
+searchPubMed
+
+Import type:
+
+Paper
+
+Extend AnalyzeResponse:
+
+papers: Paper[]
+
+When query arrives:
+
+const papers = await searchPubMed(query);
+
+Return:
+
+{
+landscape,
+emergingAreas,
+researchGaps,
+projects,
+datasets,
+papers
+}
+
+Add TODO comments:
+
+// TODO GEO integration
+// TODO SRA integration
+// TODO ArrayExpress integration
+// TODO Europe PMC integration
+// TODO AI reasoning layer
+
+==================================================
+STEP 10 — UPDATE ResultsContent.tsx
+===================================
+
+Extend AnalysisResponse:
+
+papers: Paper[]
+
+Add sixth section:
+
+📚 Related Papers
+
+For each paper show:
+
+Title
+
+Journal • Year
+
+First three authors
+
+PMID
+
+Abstract preview (max 300 chars)
+
+PubMed link
+
+Preserve existing dark mode and styling.
+
+Handle:
+
+Loading state
+
+Empty state
+
+Error state
+
+==================================================
+STEP 11 — PERFORMANCE
+=====================
+
+Use Promise.all where appropriate.
+
+Avoid duplicate API calls.
+
+Limit to top 10 papers.
+
+Never block UI.
+
+==================================================
+STEP 12 — FUTURE TODO COMMENTS
+==============================
+
+Add TODO comments for:
+
+Citation counts
+
+Similar articles
+
+Keyword extraction
+
+AI summarization
+
+Vector embeddings
+
+RAG support
+
+Europe PMC
+
+GEO
+
+SRA
+
+ArrayExpress
+
+TCGA
+
+==================================================
+FINAL GOAL
+
+ResearchCoPilot should support:
+
+User Query
+↓
+PubMed ESearch
+↓
+ESummary
+↓
+EFetch
+↓
+MeSH Terms
+↓
+Paper Objects
+↓
+API Response
+↓
+Related Papers UI
+
+without using any AI.
+
+Focus only on making PubMed production-ready and modular.
