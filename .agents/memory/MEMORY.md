@@ -1,0 +1,1 @@
+- [Starlette exception handler quirk](starlette-exception-handler.md) — @app.exception_handler(Exception) cannot be tested via HTTP in Starlette 0.40; test the handler function directly.

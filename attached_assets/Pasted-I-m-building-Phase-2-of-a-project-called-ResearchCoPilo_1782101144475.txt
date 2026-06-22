@@ -1,0 +1,219 @@
+I'm building Phase 2 of a project called ResearchCoPilot. This phase builds
+ONLY infrastructure and observability — no biology, no PubMed, no GEO, no
+scientific logic of any kind. This is purely the skeleton that future phases
+will plug modules into.
+
+CONTEXT:
+
+
+Existing PubMed integration lives in a separate Next.js/TypeScript codebase
+and is NOT being touched or migrated in this phase.
+This phase creates a new Python FastAPI service that will sit behind the
+Next.js app, and the Next.js app will proxy requests to it.
+
+
+BUILD THE FOLLOWING, IN THIS ORDER:
+
+
+Config (app/core/config.py)
+
+Use pydantic-settings for env-based config
+Settings needed: REDIS_URL, CORS_ORIGINS, CACHE_TTL_SECONDS (default
+24 hours in seconds), NCBI_API_KEY (optional, affects rate limit
+ceiling — 3 req/s without, 10 req/s with), UPSTREAM_TIMEOUT_SECONDS
+(default 20)
+
+
+
+Structured logging (app/core/logging.py)
+
+Use Python's logging module, configured for JSON-style structured
+output
+Every log line includes: timestamp, level, request_id (pulled from
+request context, see #3 — log a placeholder like "unset" if called
+outside a request), module, message
+Expose a get_logger(module_name) function that future modules import
+and use
+Never use print() anywhere in this codebase, including tests'
+non-assertion output
+
+
+
+Request context and correlation IDs (app/core/request_context.py)
+
+Every incoming request gets a correlation ID: use the one in an
+incoming header (e.g. X-Request-ID) if present, otherwise generate a
+UUID4
+Store it in a request-scoped context variable (contextvars.ContextVar)
+so any function can retrieve the current request_id without it being
+passed as a parameter through every call
+Add FastAPI middleware that generates/extracts the ID at request start,
+sets the context var, and attaches the ID to the outgoing response
+headers too
+
+
+
+Pydantic models (app/models/)
+
+base.py: a base API response model other models extend
+error.py: ErrorResponse model wrapping an inner object with code (str),
+message (str), module (str), request_id (str) — this is the ONE error
+shape used everywhere in this service, e.g.:
+{ "error": { "code": "...", "message": "...", "module": "...", "request_id": "..." } }
+health.py: HealthResponse model with status (str), redis (str),
+uptime_seconds (float)
+Use these models as FastAPI response_model / return types instead of
+raw dicts wherever the response shape is one of these three
+
+
+
+Shared HTTP client (app/core/http_client.py)
+
+A get_http_client() factory returning a shared httpx.AsyncClient
+Configured with: timeout from UPSTREAM_TIMEOUT_SECONDS, connection
+pooling, keep-alive enabled
+No external calls happen yet — this just provides the configured
+client for future modules to import
+
+
+
+FastAPI app skeleton (app/main.py, app/api/)
+
+Standard structure: app/main.py, app/api/, app/core/, app/services/,
+app/models/
+Register the request-ID middleware from #3
+CORS configured to allow requests from the Next.js frontend (origin
+configurable via env var)
+A /health endpoint returning a HealthResponse: service status, Redis
+connectivity status, uptime
+A global exception handler that catches unhandled errors and returns
+them as ErrorResponse — never a raw stack trace or unstructured 500.
+Every error response must include the current request_id from context.
+
+
+
+Redis cache layer (app/core/cache.py)
+
+A CacheClient class wrapping redis-py (use redis.asyncio)
+Methods: get(key), set(key, value, ttl_seconds), delete(key)
+Cache keys built from normalized query string + module name, e.g.
+f"{module_name}:{normalized_query_hash}"
+Include a normalize_query() helper (lowercase, strip whitespace, sort
+multi-term queries) so "TP53" and " tp53 " hit the same key
+TTL defaults to CACHE_TTL_SECONDS from config
+Do NOT cache empty or error results
+Use the shared logger from #2 for cache hit/miss/error logs (e.g.
+"cache hit", "cache miss") — not print()
+
+
+
+Rate limiter (app/core/rate_limiter.py)
+
+A RateLimiter class that can be INSTANTIATED MULTIPLE TIMES, once per
+upstream service or service family — do NOT build a single global
+rate limiter singleton
+Token-bucket or sliding-window algorithm, backed by Redis (so it works
+correctly across multiple FastAPI worker processes)
+Constructor: name (str), max_requests (int), per_seconds (float)
+Pre-configure ONE instance for now:
+ncbi_entrez_limiter = RateLimiter(name="ncbi_entrez", max_requests=3, per_seconds=1)
+— representing the shared pool that PubMed, GEO, SRA, and GenBank will
+all draw from later, since they're all NCBI Entrez endpoints. Wire
+max_requests to 10 automatically when NCBI_API_KEY is set in config.
+Design the class so additional named instances (uniprot_limiter,
+kegg_limiter, etc.) can be added later with no changes to the class
+Expose an async context manager so future modules can do
+async with ncbi_entrez_limiter: around their real API calls
+Use the shared logger for rate-limit waits/rejections
+
+
+
+Module router (app/services/module_router.py)
+
+Registry pattern: ModuleRegistry class with register(name, handler)
+and get(name)
+Leave the registry empty — include one commented-out example showing
+how a future module would register itself, e.g.
+# registry.register("pubmed", pubmed_handler)
+Router behavior: given a request, check cache first (return
+immediately on hit, logged as such), and if no module is registered
+for the requested type, return a structured ErrorResponse
+("not implemented yet") — never a 500 crash
+Include an async fan-out helper (asyncio.gather with
+return_exceptions=True) that will later call multiple modules in
+parallel for one query and return partial results if some fail or
+time out. Implement this now even with no real modules — prove it
+with a test using two dummy async functions (one succeeds, one
+raises) showing it returns partial results instead of failing the
+whole batch. Respect UPSTREAM_TIMEOUT_SECONDS per call.
+
+
+
+Response assembly layer (app/services/response_assembler.py)
+
+Skeleton ResponseAssembler class with methods: merge(),
+merge_partial(), format_response() — no actual assembly logic yet,
+just the interface and docstrings
+Docstrings explain that future modules (PubMed, GEO, SRA, ENA,
+GenBank, UniProt, PDB, KEGG, Reactome) will produce independent
+results assembled here
+Document the intended future behavior in comments: support partial
+failures, preserve successful module results even when others fail,
+never fail the whole request because one module timed out
+
+
+
+requirements.txt
+
+fastapi, uvicorn, redis, pydantic-settings, httpx, pytest,
+pytest-asyncio
+
+
+
+Tests (tests/)
+
+Cache client get/set/delete (real or mocked Redis)
+Rate limiter actually delays/blocks requests beyond its configured
+threshold
+Module router returns a structured ErrorResponse for an unregistered
+module, not a crash
+Fan-out helper returns partial results when one of two concurrent
+calls raises
+Correlation ID middleware: ID is generated when absent, preserved
+when supplied via header, present in response headers
+Error responses always include code/message/module/request_id in
+the documented shape
+Health endpoint returns the documented HealthResponse shape
+Timeout config is actually applied to the shared HTTP client
+Structured logger emits the documented JSON fields
+Response assembler skeleton: methods exist and are callable with
+no-op/placeholder behavior
+
+
+
+Future TODO comments
+
+Add clearly marked TODO comments (not implemented) for: Celery,
+Postgres, identifier resolver, NER, vector embeddings, RAG, AI
+reasoning layer, Prometheus metrics, OpenTelemetry tracing,
+rate-limit dashboards, distributed workers, request analytics
+
+
+
+
+
+EXPLICITLY DO NOT:
+
+
+Do not write any PubMed, GEO, SRA, ENA, GenBank, UniProt, KEGG, Reactome,
+or PDB client code, or any Biopython/Entrez integration
+Do not add an identifier resolver or NER logic
+Do not build a Celery task queue or add Postgres
+Do not implement metrics, tracing, or analytics — only leave TODOs
+Do not touch or modify the existing Next.js/TypeScript PubMed code
+Do not use print() anywhere — use the structured logger
+
+
+Give me the full file structure and contents, ready to run on Replit, with
+clear setup instructions for Redis (assume Replit's Redis add-on or a
+REDIS_URL env var pointing to an external Redis instance).

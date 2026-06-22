@@ -1,0 +1,16 @@
+kind = "api"
+previewPath = "/research-api"
+title = "Research API"
+version = "1.0.0"
+id = "artifacts/research-api"
+
+[[services]]
+name = "API Service"
+paths = ["/research-api"]
+localPort = 8082
+
+[services.development]
+run = "bash /home/runner/workspace/artifacts/research-api/start.sh"
+
+[services.env]
+PORT = "8082"
