@@ -17,34 +17,32 @@ interface PubMedTestResponse {
   query: string;
   paperCount: number;
   papers: Paper[];
+  status: string;
+  executionTimeMs: number;
+  cached: boolean;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  try {
-    const body = (await req.json()) as PubMedTestRequest;
+  const body = (await req.json()) as PubMedTestRequest;
 
-    if (!body.query || typeof body.query !== "string" || !body.query.trim()) {
-      return NextResponse.json(
-        { error: "query is required and must be a non-empty string" },
-        { status: 400 }
-      );
-    }
-
-    const query = body.query.trim();
-    const papers = await searchPubMed(query);
-
-    const result: PubMedTestResponse = {
-      query,
-      paperCount: papers.length,
-      papers,
-    };
-
-    return NextResponse.json(result, { status: 200 });
-  } catch (err) {
-    console.error("[/api/pubmed-test] Unexpected error:", err);
+  if (!body.query || typeof body.query !== "string" || !body.query.trim()) {
     return NextResponse.json(
-      { error: "An unexpected error occurred. Please try again." },
-      { status: 500 }
+      { error: "query is required and must be a non-empty string" },
+      { status: 400 }
     );
   }
+
+  const query = body.query.trim();
+  const result = await searchPubMed(query);
+
+  const response: PubMedTestResponse = {
+    query,
+    paperCount: result.count,
+    papers: result.data,
+    status: result.status,
+    executionTimeMs: result.executionTimeMs,
+    cached: result.cached,
+  };
+
+  return NextResponse.json(response, { status: 200 });
 }

@@ -45,8 +45,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Run PubMed first, then GEO sequentially to stay within NCBI's 3 req/s rate limit.
   // Running them concurrently fires 5 NCBI requests at once and triggers HTTP 429.
-  const { papers, error: papersError } = await searchPubMed(query);
-  const { datasets, error: datasetsError } = await searchGeoDatasets(query);
+  //
+  // Both return ModuleResult<T> — the standardised envelope defined in types/module-result.ts.
+  // All future modules (GenBank, ENA, SRA, UniProt, KEGG, Reactome, PDB, AlphaFold) must
+  // also return ModuleResult<T> so this assembler can consume them uniformly.
+  const pubmedResult = await searchPubMed(query);
+  const geoResult = await searchGeoDatasets(query);
+
+  // Map ModuleResult error fields to the backward-compatible external API shape.
+  // papersError / datasetsError are surfaced to the frontend when status is "error" or "partial",
+  // allowing the UI to distinguish a backend failure from a genuine zero-result query.
+  const papersError = pubmedResult.error?.message;
+  const datasetsError = geoResult.error?.message;
 
   // Mock data — will be replaced by OpenAI reasoning over papers + datasets
   const result: AnalyzeResponse = {
@@ -70,8 +80,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       "Machine learning classification system",
       "Multi-omics biomarker prediction",
     ],
-    datasets,
-    papers,
+    datasets: geoResult.data,
+    papers: pubmedResult.data,
     ...(papersError && { papersError }),
     ...(datasetsError && { datasetsError }),
   };

@@ -45,26 +45,20 @@ export interface GeoSummaryResult {
 
 /**
  * Fetch ESummary metadata for an array of GEO UIDs (db=gds).
- * Returns null on failure; callers must guard against null.
+ * Throws on HTTP error or network failure — the calling module (index.ts) handles all errors
+ * and maps them to the correct ModuleResult status.
  */
 export async function fetchGeoSummaries(
   uids: string[]
-): Promise<GeoSummaryResult | null> {
-  if (uids.length === 0) return null;
+): Promise<GeoSummaryResult> {
+  const params = new URLSearchParams({
+    db: "gds",
+    id: uids.join(","),
+    retmode: "json",
+  });
 
-  try {
-    const params = new URLSearchParams({
-      db: "gds",
-      id: uids.join(","),
-      retmode: "json",
-    });
+  const res = await fetchWithRetry(`${ESUMMARY_BASE}?${params}`);
+  if (!res.ok) throw new Error(`GEO ESummary HTTP ${res.status}`);
 
-    const res = await fetchWithRetry(`${ESUMMARY_BASE}?${params}`);
-    if (!res.ok) throw new Error(`GEO ESummary HTTP ${res.status}`);
-
-    return (await res.json()) as GeoSummaryResult;
-  } catch (err) {
-    console.error("[fetchGeoSummaries] ESummary failed:", err);
-    return null;
-  }
+  return (await res.json()) as GeoSummaryResult;
 }

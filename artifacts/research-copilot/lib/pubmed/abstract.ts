@@ -32,30 +32,28 @@ export interface AbstractDetails {
  * Fetch full article records from EFetch for a list of PMIDs.
  * Parses abstract, DOI, MeSH terms, and publication types from XML.
  * Returns a Record keyed by PMID; missing fields are simply omitted.
- * Returns an empty object on any failure.
+ * Throws on HTTP error or network failure — the calling module (index.ts) handles all errors
+ * and maps them to the correct ModuleResult status (status "partial" when EFetch fails but
+ * ESummary already succeeded and produced usable paper metadata).
+ * Individual per-article XML parse failures are handled silently (the article is skipped).
  */
 export async function fetchPaperAbstracts(
   pmids: string[]
 ): Promise<Record<string, AbstractDetails>> {
   if (pmids.length === 0) return {};
 
-  try {
-    const params = new URLSearchParams({
-      db: "pubmed",
-      id: pmids.join(","),
-      rettype: "xml",
-      retmode: "xml",
-    });
+  const params = new URLSearchParams({
+    db: "pubmed",
+    id: pmids.join(","),
+    rettype: "xml",
+    retmode: "xml",
+  });
 
-    const res = await fetchWithRetry(`${EFETCH_BASE}?${params}`);
-    if (!res.ok) throw new Error(`EFetch HTTP ${res.status}`);
+  const res = await fetchWithRetry(`${EFETCH_BASE}?${params}`);
+  if (!res.ok) throw new Error(`EFetch HTTP ${res.status}`);
 
-    const xml = await res.text();
-    return parseEFetchXml(xml);
-  } catch (err) {
-    console.error("[fetchPaperAbstracts] EFetch failed:", err);
-    return {};
-  }
+  const xml = await res.text();
+  return parseEFetchXml(xml);
 }
 
 // ─── Internal XML parser ──────────────────────────────────────────────────────

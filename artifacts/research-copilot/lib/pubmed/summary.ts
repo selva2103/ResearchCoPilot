@@ -37,26 +37,20 @@ export interface ESummaryResult {
 
 /**
  * Fetch ESummary metadata for an array of PMIDs.
- * Returns null on failure; callers must guard against null.
+ * Throws on HTTP error or network failure — the calling module (index.ts) handles all errors
+ * and maps them to the correct ModuleResult status.
  */
 export async function fetchPaperSummaries(
   pmids: string[]
-): Promise<ESummaryResult | null> {
-  if (pmids.length === 0) return null;
+): Promise<ESummaryResult> {
+  const params = new URLSearchParams({
+    db: "pubmed",
+    id: pmids.join(","),
+    retmode: "json",
+  });
 
-  try {
-    const params = new URLSearchParams({
-      db: "pubmed",
-      id: pmids.join(","),
-      retmode: "json",
-    });
+  const res = await fetchWithRetry(`${ESUMMARY_BASE}?${params}`);
+  if (!res.ok) throw new Error(`ESummary HTTP ${res.status}`);
 
-    const res = await fetchWithRetry(`${ESUMMARY_BASE}?${params}`);
-    if (!res.ok) throw new Error(`ESummary HTTP ${res.status}`);
-
-    return (await res.json()) as ESummaryResult;
-  } catch (err) {
-    console.error("[fetchPaperSummaries] ESummary failed:", err);
-    return null;
-  }
+  return (await res.json()) as ESummaryResult;
 }

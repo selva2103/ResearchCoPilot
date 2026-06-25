@@ -1,0 +1,194 @@
+PHASE 2.8 — STANDARDIZE MODULE INTERFACE
+
+Goal:
+Before implementing any new scientific databases (GenBank, ENA, SRA, 
+UniProt, KEGG, Reactome, etc.), refactor the current architecture so EVERY 
+data module returns exactly the same response format.
+
+IMPORTANT
+- Do NOT implement any new scientific modules.
+- Do NOT modify the Python FastAPI service in any way (config, middleware, 
+  cache, rate limiter, response assembler, models) — this phase is 
+  TypeScript-side only. If you believe the Python side should eventually 
+  adopt an equivalent shape, leave a TODO comment about it but do not 
+  implement or modify any Python code.
+- Do NOT modify business logic.
+- Do NOT change the search algorithms.
+- Do NOT migrate PubMed to Python.
+- Do NOT change the frontend design.
+This phase is purely an architectural refactor to standardize module 
+outputs on the TypeScript side.
+
+--------------------------------------------------
+OBJECTIVE
+--------------------------------------------------
+Right now each module has its own return format: searchPubMed(), 
+searchGeoDatasets(). Future modules will include searchGenBank(), 
+searchENA(), searchSRA(), searchUniProt(), searchKEGG(), searchReactome().
+
+Instead of every module returning different objects, build ONE generic 
+interface that every present and future TypeScript module must implement.
+
+--------------------------------------------------
+STEP 1 — Create Generic Types
+--------------------------------------------------
+Create a new shared module for response types: types/module-result.ts
+
+interface ModuleError {
+    code: string;
+    message: string;
+}
+
+interface ModuleResult<T> {
+    module: string;
+    status: "success" | "partial" | "empty" | "error";
+    data: T[];
+    count: number;
+    error: ModuleError | null;
+    executionTimeMs: number;
+    cached: boolean;
+    timestamp: string;
+}
+
+Use TypeScript generics so ModuleResult<Paper>, ModuleResult<GeoDataset>, 
+etc. all reuse the same interface.
+
+Add a comment noting that this shape is conceptually related to (but 
+currently separate from) the Python service's ErrorResponse shape 
+(error.code, error.message, error.module, error.request_id) — and that a 
+future phase may want to add a request_id-equivalent field here and 
+reconcile the two, but that is explicitly out of scope for this phase.
+
+--------------------------------------------------
+STEP 2 — Refactor Existing Modules
+--------------------------------------------------
+Update ONLY searchPubMed() and searchGeoDatasets() so they both return 
+ModuleResult<T> instead of their own custom object. Do NOT change how they 
+retrieve data — only change the returned structure.
+- PubMed → ModuleResult<Paper>
+- GEO → ModuleResult<GeoDataset>
+
+--------------------------------------------------
+STEP 3 — Standard Status Rules (with concrete per-module trigger conditions)
+--------------------------------------------------
+Use exactly these status values:
+- success: data returned, no failures.
+- empty: the upstream call(s) succeeded but returned zero matching records.
+- partial: some upstream requests failed but useful data still exists.
+- error: module failed completely, no usable data.
+
+For PubMed specifically, state explicitly which scenario maps to "partial": 
+e.g. ESearch succeeds and returns PMIDs, but ESummary or EFetch fails for 
+some subset of those PMIDs while succeeding for others — that is "partial." 
+If ESearch itself fails, that is "error." If ESearch succeeds with zero 
+PMIDs, that is "empty."
+
+For GEO, state the equivalent explicitly using its own actual call sequence 
+(e.g. ESearch/ESummary equivalents for GEO) — do not leave this undefined 
+or copy PubMed's logic without checking it actually applies to GEO's flow.
+
+Apply these consistently across both PubMed and GEO, and write down (in 
+code comments) the exact condition that triggers each status per module, 
+so future modules have a concrete pattern to follow instead of guessing.
+
+--------------------------------------------------
+STEP 4 — Execution Time
+--------------------------------------------------
+Measure execution time inside every module using high-resolution timing. 
+Populate executionTimeMs.
+
+--------------------------------------------------
+STEP 5 — Count
+--------------------------------------------------
+Automatically calculate count = data.length. Never manually assign it.
+
+--------------------------------------------------
+STEP 6 — Timestamp
+--------------------------------------------------
+Populate timestamp using ISO 8601, e.g. 2026-06-25T15:20:31Z.
+
+--------------------------------------------------
+STEP 7 — Cached Flag
+--------------------------------------------------
+Even though Redis caching is not yet connected to these TypeScript modules, 
+include cached: false for now. Leave a TODO explaining that Redis will 
+update this field later.
+
+--------------------------------------------------
+STEP 8 — Response Assembler Compatibility (TypeScript side only)
+--------------------------------------------------
+If there is a TypeScript-side response assembly step (not the Python 
+ResponseAssembler — leave that untouched per the IMPORTANT section), update 
+it so it consumes ModuleResult<T> objects instead of module-specific 
+responses. Do NOT change frontend behavior — the UI should continue to 
+work exactly as before.
+
+--------------------------------------------------
+STEP 9 — Frontend Compatibility
+--------------------------------------------------
+Update app/api/analyze/route.ts only as much as needed so the frontend 
+still receives the same JSON fields currently expected. Internally use 
+ModuleResult. Externally preserve backward compatibility — this avoids 
+breaking ResultsContent.tsx while preparing for future modules.
+
+--------------------------------------------------
+STEP 10 — Future-Proof Documentation
+--------------------------------------------------
+Add JSDoc comments explaining that ALL future scientific modules MUST 
+return ModuleResult<T>. Mention specifically: PubMed, GEO, GenBank, ENA, 
+SRA, UniProt, KEGG, Reactome, PDB, AlphaFold. Any future module must 
+implement this interface.
+
+--------------------------------------------------
+STEP 11 — Validation (explicit regression test, not a general claim)
+--------------------------------------------------
+Run the existing application and test these exact five queries, which were 
+used in the previous PubMed bugfix round: breast cancer, tuberculosis, 
+CRISPR off-target effects, gut microbiome obesity, Alzheimer's disease.
+
+For each of the five, confirm explicitly:
+- PubMed still returns a non-zero paper count
+- GEO still returns its expected dataset results (or a correct "empty" 
+  status if GEO genuinely has none for that query — state which it is per 
+  query, don't just say "no regression")
+- Results page renders unchanged
+- No TypeScript errors
+- No broken imports
+
+Do not report "no regression" as a blanket statement — report pass/fail 
+per query, per module.
+
+--------------------------------------------------
+STEP 12 — Final Report
+--------------------------------------------------
+Report:
+- Files modified
+- Architecture changes
+- How PubMed now implements ModuleResult<Paper>
+- How GEO now implements ModuleResult<GeoDataset>
+- The exact per-module conditions that trigger "partial" vs "error" vs 
+  "empty" (per Step 3)
+- Per-query validation results for all five test queries (per Step 11)
+- How future modules will reuse exactly the same interface
+- Confirm that no functionality changed and only the architecture was 
+  standardized
+- Confirm that no Python/FastAPI files were modified
+
+IMPORTANT
+This phase must NOT introduce any new scientific functionality. The only 
+goal is to create a single reusable contract that every future TypeScript 
+database module will implement, without touching the Python service.
+
+Before modifying any code:
+
+1. Identify all locations where module-specific response objects currently exist.
+
+2. Produce a short refactoring plan.
+
+3. Apply the smallest architectural change necessary.
+
+4. Do not rewrite working modules unless required to adopt ModuleResult<T>.
+
+5. Preserve backward compatibility throughout the refactor.
+
+Only after identifying the impact should code changes begin.

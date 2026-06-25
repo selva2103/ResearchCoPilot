@@ -23,25 +23,21 @@ interface ESearchResponse {
 
 /**
  * Search PubMed for the top 10 PMIDs matching `query`, sorted by relevance.
- * Returns an empty array on any failure so callers never have to handle exceptions.
+ * Throws on HTTP error or network failure — the calling module (index.ts) handles all errors
+ * and maps them to the correct ModuleResult status.
  */
 export async function searchPubMedIds(query: string): Promise<string[]> {
-  try {
-    const params = new URLSearchParams({
-      db: "pubmed",
-      term: query,
-      retmax: "10",
-      retmode: "json",
-      sort: "relevance",
-    });
+  const params = new URLSearchParams({
+    db: "pubmed",
+    term: query,
+    retmax: "10",
+    retmode: "json",
+    sort: "relevance",
+  });
 
-    const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
-    if (!res.ok) throw new Error(`ESearch HTTP ${res.status}`);
+  const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
+  if (!res.ok) throw new Error(`ESearch HTTP ${res.status}`);
 
-    const data = (await res.json()) as ESearchResponse;
-    return data.esearchresult.idlist ?? [];
-  } catch (err) {
-    console.error("[searchPubMedIds] ESearch failed:", err);
-    return [];
-  }
+  const data = (await res.json()) as ESearchResponse;
+  return data.esearchresult.idlist ?? [];
 }

@@ -4,12 +4,16 @@
  * Full pipeline:
  *
  *   query
- *     ↓  ESearch  (search.ts)
+ *     ↓  ESearch  (search.ts)           → throws on failure
  *   pmids[]
  *     ↓  ESummary + EFetch in parallel  (summary.ts / abstract.ts)
  *   summaryData + abstractData
  *     ↓  parser  (parser.ts)
- *   Paper[]
+ *   Paper[]  wrapped in ModuleResult<Paper>
+ *
+ * ALL future scientific modules MUST return ModuleResult<T>.
+ * See types/module-result.ts for the full interface and status semantics.
+ * Future modules to implement: GenBank, ENA, SRA, UniProt, KEGG, Reactome, PDB, AlphaFold.
  *
  * TODO: Europe PMC    — supplement with full-text search results
  * TODO: GEO           — link relevant expression datasets to papers
@@ -22,47 +26,116 @@
  */
 
 import type { Paper } from "@/types/paper";
+import type { ModuleResult } from "@/types/module-result";
+import { buildModuleResult, toModuleError } from "@/types/module-result";
 import { searchPubMedIds } from "./search";
 import { fetchPaperSummaries } from "./summary";
 import { fetchPaperAbstracts } from "./abstract";
 import { parsePubMedResults } from "./parser";
 
-export interface PubMedResult {
-  papers: Paper[];
-  /** Present when the pipeline failed (e.g. NCBI rate-limited) vs. a genuine zero-result query */
-  error?: string;
-}
-
 /**
- * Search PubMed for papers matching `query` and return up to 10 Paper objects.
- * ESummary and EFetch run in parallel to minimise latency.
- * Returns an empty papers array on any failure — never throws.
- * Sets `error` when the failure is due to a backend issue (e.g. HTTP 429) so
- * callers can distinguish a rate-limit from a genuine zero-result query.
+ * Search PubMed for papers matching `query` and return up to 10 Paper objects
+ * wrapped in a ModuleResult<Paper>.
+ *
+ * Pipeline: ESearch → ESummary + EFetch (parallel) → parse → ModuleResult<Paper>
+ *
+ * Status mapping — exact per-stage conditions that trigger each value:
+ *
+ *   "error"   — ESearch fails (network error, HTTP error, rate-limit after retries exhausted);
+ *               OR ESearch succeeds but ESummary fails (no usable paper metadata available).
+ *               data is always [] when status is "error".
+ *
+ *   "empty"   — ESearch succeeds but returns 0 PMIDs (genuinely no matching papers found);
+ *               OR ESummary returns data but none of the articles could be parsed into Papers.
+ *
+ *   "partial" — ESearch + ESummary succeed (papers have titles/authors/journals/years),
+ *               but EFetch fails (papers lack abstract, DOI, MeSH terms, publication types).
+ *               data.length > 0; useful partial results exist. Future modules should
+ *               follow this pattern: "partial" requires usable data AND at least one failure.
+ *
+ *   "success" — All three stages (ESearch, ESummary, EFetch) succeed and data.length > 0.
  */
-export async function searchPubMed(query: string): Promise<PubMedResult> {
+export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> {
+  const startedAt = performance.now();
+
+  // ── Stage 1: ESearch → PMIDs ─────────────────────────────────────────────
+  // searchPubMedIds throws on HTTP error or network failure.
+  // If this stage fails → status "error" (no usable data at all).
+  let pmids: string[];
   try {
-    const pmids = await searchPubMedIds(query);
-    if (pmids.length === 0) return { papers: [] };
-
-    // ESummary (metadata) and EFetch (abstracts + MeSH) run concurrently
-    const [summaryData, abstractData] = await Promise.all([
-      fetchPaperSummaries(pmids),
-      fetchPaperAbstracts(pmids),
-    ]);
-
-    const papers = parsePubMedResults(summaryData, abstractData);
-    return { papers };
+    pmids = await searchPubMedIds(query);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const isRateLimit = message.includes("429");
-    return {
-      papers: [],
-      error: isRateLimit
-        ? "NCBI is temporarily rate-limiting requests. Try again in a few seconds."
-        : `PubMed search failed: ${message}`,
-    };
+    return buildModuleResult({
+      module: "pubmed",
+      status: "error",
+      data: [],
+      error: toModuleError("ESEARCH_FAILED", err),
+      startedAt,
+    });
   }
+
+  if (pmids.length === 0) {
+    // ESearch succeeded but found 0 matching PMIDs → genuinely empty result set
+    return buildModuleResult({
+      module: "pubmed",
+      status: "empty",
+      data: [],
+      error: null,
+      startedAt,
+    });
+  }
+
+  // ── Stage 2: ESummary + EFetch in parallel ────────────────────────────────
+  // allSettled tracks per-stage failure independently without throwing.
+  // ESummary provides metadata: title, authors, journal, year.
+  // EFetch provides extended data: abstract, DOI, MeSH terms, publication types.
+  const [summarySettled, abstractSettled] = await Promise.allSettled([
+    fetchPaperSummaries(pmids),
+    fetchPaperAbstracts(pmids),
+  ]);
+
+  const esummaryFailed = summarySettled.status === "rejected";
+  const efetchFailed = abstractSettled.status === "rejected";
+
+  if (esummaryFailed) {
+    // ESearch succeeded (we have PMIDs), but ESummary failed.
+    // Without ESummary metadata, parsePubMedResults returns [] regardless of EFetch.
+    // No usable data → status "error".
+    return buildModuleResult({
+      module: "pubmed",
+      status: "error",
+      data: [],
+      error: toModuleError("ESUMMARY_FAILED", summarySettled.reason),
+      startedAt,
+    });
+  }
+
+  const summaryData = summarySettled.value;
+  const abstractData = efetchFailed ? {} : abstractSettled.value;
+  const papers = parsePubMedResults(summaryData, abstractData);
+
+  if (efetchFailed) {
+    // ESearch + ESummary succeeded, EFetch failed.
+    // parsePubMedResults still produces papers from ESummary data, but they lack
+    // the extended EFetch fields (abstract, DOI, MeSH terms, publication types).
+    // "partial" if papers were produced; "empty" if ESummary had no parseable articles.
+    return buildModuleResult({
+      module: "pubmed",
+      status: papers.length > 0 ? "partial" : "empty",
+      data: papers,
+      error: toModuleError("EFETCH_FAILED", abstractSettled.reason),
+      startedAt,
+    });
+  }
+
+  // All three stages succeeded
+  return buildModuleResult({
+    module: "pubmed",
+    status: papers.length > 0 ? "success" : "empty",
+    data: papers,
+    error: null,
+    startedAt,
+  });
 }
 
 // Re-export types for consumers that want fine-grained access

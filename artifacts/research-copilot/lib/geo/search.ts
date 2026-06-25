@@ -29,25 +29,21 @@ interface ESearchResponse {
 /**
  * Search GEO DataSets (db=gds) for the top 10 UIDs matching `query`.
  * Restricts to GSE (Series) entry type for researcher-submitted datasets.
- * Returns [] on any failure — never throws.
+ * Throws on HTTP error or network failure — the calling module (index.ts) handles all errors
+ * and maps them to the correct ModuleResult status.
  */
 export async function searchGeoIds(query: string): Promise<string[]> {
-  try {
-    const params = new URLSearchParams({
-      db: "gds",
-      term: query,
-      retmax: "10",
-      retmode: "json",
-      sort: "relevance",
-    });
+  const params = new URLSearchParams({
+    db: "gds",
+    term: query,
+    retmax: "10",
+    retmode: "json",
+    sort: "relevance",
+  });
 
-    const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
-    if (!res.ok) throw new Error(`GEO ESearch HTTP ${res.status}`);
+  const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
+  if (!res.ok) throw new Error(`GEO ESearch HTTP ${res.status}`);
 
-    const data = (await res.json()) as ESearchResponse;
-    return data.esearchresult.idlist ?? [];
-  } catch (err) {
-    console.error("[searchGeoIds] ESearch failed:", err);
-    return [];
-  }
+  const data = (await res.json()) as ESearchResponse;
+  return data.esearchresult.idlist ?? [];
 }
