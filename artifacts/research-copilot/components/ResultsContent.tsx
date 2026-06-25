@@ -173,7 +173,7 @@ function DatasetsSection({ datasets, error }: { datasets: Dataset[]; error?: str
 
       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50">
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          Live data — NCBI GEO ESearch · ESummary
+          Live data — NCBI GEO ESearch · ESummary · GSE Series
         </p>
       </div>
     </div>
@@ -187,10 +187,33 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
       : ds.summary
     : null;
 
+  // Format publicationDate "YYYY-MM-DD" → "Mon YYYY"
+  const formattedDate = ds.publicationDate
+    ? (() => {
+        const d = new Date(ds.publicationDate + "T00:00:00Z");
+        return isNaN(d.getTime())
+          ? ds.publicationDate
+          : d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+      })()
+    : null;
+
+  // Shorten experimentType for badge display
+  const shortExperimentType = ds.experimentType
+    ? ds.experimentType
+        .replace("Expression profiling by high throughput sequencing", "RNA-Seq")
+        .replace("Expression profiling by array", "Microarray")
+        .replace("Genome binding/occupancy profiling by high throughput sequencing", "ChIP-Seq / ATAC-Seq")
+        .replace("Methylation profiling by high throughput sequencing", "Methylation-Seq")
+        .replace("Other", ds.experimentType)
+    : null;
+
+  const hasDownloads =
+    ds.seriesMatrixUrl || ds.softFileUrl || ds.miniMLUrl || ds.ftpDownloadUrl;
+
   return (
     <li className="px-5 py-4 flex gap-3 items-start">
       <span className="mt-1.5 h-2 w-2 rounded-full shrink-0 bg-violet-500" />
-      <div className="min-w-0 space-y-1">
+      <div className="min-w-0 space-y-1.5">
         <p className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-snug">
           {ds.title}
         </p>
@@ -201,7 +224,8 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
           </p>
         )}
 
-        <div className="flex flex-wrap gap-2 pt-1">
+        {/* Core badges */}
+        <div className="flex flex-wrap gap-2 pt-0.5">
           <span className="text-xs bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-2 py-0.5 rounded-full font-mono font-medium">
             {ds.accession}
           </span>
@@ -216,6 +240,20 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
               {ds.sampleCount} samples
             </span>
           )}
+          {shortExperimentType && (
+            <span className="text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-full">
+              {shortExperimentType}
+            </span>
+          )}
+          {formattedDate && (
+            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 px-2 py-0.5 rounded-full">
+              {formattedDate}
+            </span>
+          )}
+        </div>
+
+        {/* Links row */}
+        <div className="flex flex-wrap gap-2 pt-0.5">
           {ds.geoUrl && (
             <a
               href={ds.geoUrl}
@@ -223,7 +261,61 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
               rel="noopener noreferrer"
               className="text-xs bg-violet-50 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 px-2 py-0.5 rounded-full hover:underline"
             >
-              View on GEO ↗
+              GEO ↗
+            </a>
+          )}
+          {hasDownloads && (
+            <>
+              {ds.seriesMatrixUrl && (
+                <a
+                  href={ds.seriesMatrixUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full hover:underline"
+                >
+                  Series Matrix ↓
+                </a>
+              )}
+              {ds.softFileUrl && (
+                <a
+                  href={ds.softFileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full hover:underline"
+                >
+                  SOFT ↓
+                </a>
+              )}
+              {ds.miniMLUrl && (
+                <a
+                  href={ds.miniMLUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full hover:underline"
+                >
+                  MINiML ↓
+                </a>
+              )}
+              {ds.ftpDownloadUrl && (
+                <a
+                  href={ds.ftpDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full hover:underline"
+                >
+                  FTP ↗
+                </a>
+              )}
+            </>
+          )}
+          {ds.pubmedIds && ds.pubmedIds.length > 0 && (
+            <a
+              href={`https://pubmed.ncbi.nlm.nih.gov/${ds.pubmedIds[0]}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs bg-rose-50 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 px-2 py-0.5 rounded-full hover:underline"
+            >
+              PMID {ds.pubmedIds[0]} ↗
             </a>
           )}
         </div>

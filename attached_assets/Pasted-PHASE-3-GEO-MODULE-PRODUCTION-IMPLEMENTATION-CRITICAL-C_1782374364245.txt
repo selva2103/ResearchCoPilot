@@ -1,0 +1,370 @@
+PHASE 3 — GEO MODULE (PRODUCTION IMPLEMENTATION)
+
+CRITICAL CONTEXT —Before writing any implementation code, inspect one real GEO ESearch response and one real GEO ESummary response for a representative query (for example "breast cancer"), document the observed response structure, and build the parser against the observed schema rather than assumptions. If the live schema differs from expectations, adapt to the live schema and report the difference.
+ READ BEFORE STARTING ANY CODE:
+GEO's API shape is meaningfully different from PubMed's, even though the 
+overall architecture (modular files, ModuleResult, retry logic) should 
+mirror PubMed's. Do NOT assume the data pipeline is a 1:1 copy of PubMed's 
+ESearch → ESummary → EFetch shape. Specifically:
+
+1. A single ESearch against db=gds can return a MIX of GEO Series (GSE), 
+   GEO DataSets (GDS), and sometimes Samples (GSM) — not uniformly GSE 
+   records. Before parsing, inspect the entry type / accession prefix for 
+   each result. Either filter to GSE-only as the cleanest first pass, or 
+   handle each type's field differences explicitly — state in the final 
+   report which approach was taken and why.
+
+2. GEO's ESummary response structure and field names differ from PubMed's 
+   ESummary. Do not assume PubMed's parsing logic transfers. Inspect a real 
+   ESummary response for db=gds first, then build the parser against its 
+   actual observed shape.
+
+3. There is no GEO EFetch-equivalent for abstract-style full text. The real 
+   pipeline is ESearch → ESummary only (two upstream calls, not three). Do 
+   not invent or force a third fetch step just to mirror PubMed's three-step 
+   shape — two steps is correct and complete for GEO.
+
+4. The download links in Step 5 (FTP, Series Matrix, SOFT, MINiML) are NOT 
+   returned by any API call — they must be CONSTRUCTED from the accession 
+   number using NCBI's documented, predictable FTP URL directory pattern. 
+   This construction is correct and expected. "Do not fabricate URLs" in 
+   Step 5 means: don't invent a URL pattern that doesn't match NCBI's real 
+   FTP structure — it does NOT mean "never construct a URL." Verify the 
+   actual pattern against NCBI's real FTP directory structure before 
+   implementing, and only emit a link for a resource type once you've 
+   confirmed that type of file actually exists for that accession (not 
+   every GSE has, for example, a Series Matrix file) — check existence 
+   before constructing the link, don't assume every accession has every 
+   resource type.
+
+If any of these four points turn out to be wrong once you're actually 
+looking at real GEO API responses, say so explicitly in the final report 
+rather than silently working around it.
+
+--------------------------------------------------
+
+Goal
+
+Build a production-quality GEO (Gene Expression Omnibus) module comparable in quality, architecture, and robustness to the existing PubMed module.
+
+This is NOT just a dataset search feature.
+
+The GEO module should become the standardized expression-data layer of ResearchCoPilot.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify:
+
+- Python FastAPI infrastructure
+- Redis
+- Rate limiter
+- Cache layer
+- ModuleResult interface
+- PubMed module
+- AI features
+- Frontend design
+
+This phase only adds a complete GEO module on the existing TypeScript architecture.
+
+--------------------------------------------------
+
+OBJECTIVE
+
+When a user searches ANY life science topic, for example:
+
+- breast cancer
+- neonatal medicine
+- tuberculosis
+- CRISPR
+- Alzheimer's disease
+- rice blast fungus
+- Arabidopsis drought stress
+
+the GEO module should search NCBI GEO and return relevant expression datasets.
+
+The module must remain completely domain-independent.
+
+--------------------------------------------------
+
+STEP 1 — GEO Architecture
+
+Review the existing PubMed module architecture.
+
+Implement the GEO module using the same design principles:
+
+- modular files
+- clean separation of responsibilities
+- reusable utilities
+- ModuleResult<GeoDataset>
+- retry handling
+- typed interfaces
+
+Do not duplicate unnecessary code.
+
+--------------------------------------------------
+
+STEP 2 — GeoDataset Model
+
+Create or extend a strongly typed GeoDataset interface.
+
+Include:
+
+- accession (GSE)
+- title
+- summary
+- organism
+- experimentType
+- platform (GPL)
+- sampleCount
+- publicationDate
+- pubmedId (if available)
+- geoUrl
+- ftpDownloadUrl (if available)
+- seriesMatrixUrl (if available)
+- softFileUrl (if available)
+- miniMLUrl (if available)
+
+Use optional fields where GEO does not always provide values.
+
+--------------------------------------------------
+
+STEP 3 — GEO Search Pipeline
+
+Implement a modular GEO pipeline similar to PubMed.
+
+Suggested structure:
+
+lib/geo/
+
+search.ts
+summary.ts
+parser.ts
+index.ts
+
+Responsibilities:
+
+search.ts
+
+- perform GEO ESearch
+- retrieve relevant GSE accessions
+
+summary.ts
+
+- retrieve metadata
+
+parser.ts
+
+- normalize metadata
+- populate GeoDataset
+
+index.ts
+
+- orchestrate pipeline
+- return ModuleResult<GeoDataset>
+
+--------------------------------------------------
+
+STEP 4 — Metadata Extraction
+
+Extract as much useful metadata as available:
+
+- accession
+- title
+- organism
+- platform
+- experiment type
+- sample count
+- publication date
+- summary
+- PubMed ID
+
+Do not invent values.
+
+Leave fields null/undefined if unavailable.
+
+--------------------------------------------------
+
+STEP 5 — Download Links
+
+Whenever possible provide download links for:
+
+- GEO page
+- FTP
+- Series Matrix
+- SOFT
+- MINiML
+
+If a dataset lacks one of these resources, omit only that field.
+
+Do not fabricate URLs.
+
+--------------------------------------------------
+
+STEP 6 — Error Handling
+
+Follow ModuleResult rules.
+
+status:
+
+success
+
+partial
+
+empty
+
+error
+
+Use the same architectural pattern already implemented for PubMed.
+
+Differentiate:
+
+- genuine empty search
+- GEO server error
+- network failure
+- rate limiting
+
+--------------------------------------------------
+
+STEP 7 — Retry Logic
+
+Reuse the existing retry utility.
+
+Respect NCBI rate limits.
+
+Do not create duplicate retry implementations.
+
+--------------------------------------------------
+
+STEP 8 — Frontend
+
+Reuse the existing Dataset Recommendations card.
+
+Do not redesign the UI.
+
+Display:
+
+- accession
+- title
+- organism
+- experiment type
+- sample count
+- publication date
+- download links
+
+Maintain responsive layout.
+
+--------------------------------------------------
+
+STEP 9 — Validation
+
+Test with all of these queries:
+
+- breast cancer
+- tuberculosis
+- Alzheimer's disease
+- neonatal medicine
+- CRISPR off-target effects
+- gut microbiome obesity
+- Arabidopsis drought stress
+
+For each query report:
+
+- GEO status
+- dataset count
+- example accession
+- example title
+- the actual raw ESearch result count BEFORE any filtering (so a 
+  zero-after-filtering result can be told apart from a zero-from-NCBI 
+  result)
+
+Do not simply report "works".
+
+Report results query-by-query, with the real accession and title values 
+printed in the report itself — not just a claim that they exist. If any 
+query returns zero datasets, state whether that's because GEO genuinely has 
+none, or because something in the pipeline filtered/dropped them, and show 
+the evidence either way.
+
+--------------------------------------------------
+
+STEP 10 — Regression Testing
+
+Verify:
+
+PubMed still works.
+
+Related Papers unchanged.
+
+No TypeScript errors.
+
+No broken imports.
+
+ModuleResult architecture preserved.
+
+No FastAPI files modified.
+
+--------------------------------------------------
+
+STEP 11 — Final Report
+
+Report:
+
+- files modified
+- architecture decisions
+- APIs used
+- metadata extracted
+- download resources supported
+- limitations of GEO
+- future enhancements
+
+Include a section titled:
+
+Future GEO Enhancements
+
+Possible future work:
+
+- sample metadata
+- GSM parsing
+- SOFT parser
+- MINiML parser
+- differential expression support
+- direct expression matrix preview
+- automatic dataset quality metrics
+
+Do NOT implement these enhancements yet.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do not implement any AI.
+
+Do not implement SRA.
+
+Do not implement ENA.
+
+Do not implement GenBank.
+
+Do not modify Python.
+
+The only goal of this phase is to build a production-quality GEO module comparable in quality and architecture to the PubMed module.
+
+Verify at least one returned dataset has working:
+
+GEO page
+
+FTP
+
+Series Matrix
+
+SOFT
+
+MINiML
+
+links.
+
+Do not only verify that the URL format is correct.
+
+Verify the generated links actually resolve successfully
