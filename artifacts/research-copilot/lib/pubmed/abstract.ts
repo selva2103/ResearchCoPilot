@@ -17,6 +17,8 @@
 
 import { extractMeshTerms } from "./mesh";
 
+import { fetchWithRetry } from "@/lib/utils";
+
 const EFETCH_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi";
 
 export interface AbstractDetails {
@@ -45,7 +47,7 @@ export async function fetchPaperAbstracts(
       retmode: "xml",
     });
 
-    const res = await fetch(`${EFETCH_BASE}?${params}`);
+    const res = await fetchWithRetry(`${EFETCH_BASE}?${params}`);
     if (!res.ok) throw new Error(`EFetch HTTP ${res.status}`);
 
     const xml = await res.text();

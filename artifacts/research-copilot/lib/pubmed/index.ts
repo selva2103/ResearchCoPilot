@@ -27,15 +27,23 @@ import { fetchPaperSummaries } from "./summary";
 import { fetchPaperAbstracts } from "./abstract";
 import { parsePubMedResults } from "./parser";
 
+export interface PubMedResult {
+  papers: Paper[];
+  /** Present when the pipeline failed (e.g. NCBI rate-limited) vs. a genuine zero-result query */
+  error?: string;
+}
+
 /**
  * Search PubMed for papers matching `query` and return up to 10 Paper objects.
  * ESummary and EFetch run in parallel to minimise latency.
- * Returns an empty array on any failure — never throws.
+ * Returns an empty papers array on any failure — never throws.
+ * Sets `error` when the failure is due to a backend issue (e.g. HTTP 429) so
+ * callers can distinguish a rate-limit from a genuine zero-result query.
  */
-export async function searchPubMed(query: string): Promise<Paper[]> {
+export async function searchPubMed(query: string): Promise<PubMedResult> {
   try {
     const pmids = await searchPubMedIds(query);
-    if (pmids.length === 0) return [];
+    if (pmids.length === 0) return { papers: [] };
 
     // ESummary (metadata) and EFetch (abstracts + MeSH) run concurrently
     const [summaryData, abstractData] = await Promise.all([
@@ -43,10 +51,17 @@ export async function searchPubMed(query: string): Promise<Paper[]> {
       fetchPaperAbstracts(pmids),
     ]);
 
-    return parsePubMedResults(summaryData, abstractData);
+    const papers = parsePubMedResults(summaryData, abstractData);
+    return { papers };
   } catch (err) {
-    console.error("[searchPubMed] Pipeline failed:", err);
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    const isRateLimit = message.includes("429");
+    return {
+      papers: [],
+      error: isRateLimit
+        ? "NCBI is temporarily rate-limiting requests. Try again in a few seconds."
+        : `PubMed search failed: ${message}`,
+    };
   }
 }
 

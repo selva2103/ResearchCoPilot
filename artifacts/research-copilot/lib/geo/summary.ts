@@ -12,6 +12,8 @@
  * TODO: Fetch citation counts via iCite for linked PubMed articles
  */
 
+import { fetchWithRetry } from "@/lib/utils";
+
 const ESUMMARY_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi";
 
 export interface GeoSummaryRecord {
@@ -57,7 +59,7 @@ export async function fetchGeoSummaries(
       retmode: "json",
     });
 
-    const res = await fetch(`${ESUMMARY_BASE}?${params}`);
+    const res = await fetchWithRetry(`${ESUMMARY_BASE}?${params}`);
     if (!res.ok) throw new Error(`GEO ESummary HTTP ${res.status}`);
 
     return (await res.json()) as GeoSummaryResult;

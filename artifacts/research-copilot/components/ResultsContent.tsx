@@ -19,6 +19,10 @@ interface AnalysisResponse {
   projects: string[];
   datasets: Dataset[];
   papers: Paper[];
+  /** Set when PubMed fetch failed — distinct from a genuine zero-result query */
+  papersError?: string;
+  /** Set when GEO fetch failed */
+  datasetsError?: string;
 }
 
 export default function ResultsContent() {
@@ -129,8 +133,8 @@ export default function ResultsContent() {
             items={data.projects}
             itemType="project"
           />
-          <DatasetsSection datasets={data.datasets} />
-          <PapersSection papers={data.papers} />
+          <DatasetsSection datasets={data.datasets} error={data.datasetsError} />
+          <PapersSection papers={data.papers} error={data.papersError} />
         </div>
       )}
     </div>
@@ -139,7 +143,7 @@ export default function ResultsContent() {
 
 // ─── Dataset Recommendations card ────────────────────────────────────────────
 
-function DatasetsSection({ datasets }: { datasets: Dataset[] }) {
+function DatasetsSection({ datasets, error }: { datasets: Dataset[]; error?: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/60 overflow-hidden shadow-sm backdrop-blur-sm">
       <div className="bg-violet-600 px-5 py-4 flex items-center gap-2">
@@ -150,7 +154,12 @@ function DatasetsSection({ datasets }: { datasets: Dataset[] }) {
         </span>
       </div>
 
-      {datasets.length === 0 ? (
+      {error && datasets.length === 0 ? (
+        <div className="px-5 py-5 text-center space-y-1">
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">⚠️ Fetch error</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{error}</p>
+        </div>
+      ) : datasets.length === 0 ? (
         <div className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
           No datasets found for this topic.
         </div>
@@ -225,7 +234,7 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
 
 // ─── Related Papers card ──────────────────────────────────────────────────────
 
-function PapersSection({ papers }: { papers: Paper[] }) {
+function PapersSection({ papers, error }: { papers: Paper[]; error?: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/60 overflow-hidden shadow-sm backdrop-blur-sm">
       <div className="bg-rose-600 px-5 py-4 flex items-center gap-2">
@@ -236,7 +245,12 @@ function PapersSection({ papers }: { papers: Paper[] }) {
         </span>
       </div>
 
-      {papers.length === 0 ? (
+      {error && papers.length === 0 ? (
+        <div className="px-5 py-5 text-center space-y-1">
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">⚠️ Fetch error</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{error}</p>
+        </div>
+      ) : papers.length === 0 ? (
         <div className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
           No papers found for this topic.
         </div>

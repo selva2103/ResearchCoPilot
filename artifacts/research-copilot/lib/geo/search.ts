@@ -14,6 +14,8 @@
  * TODO: Support pagination (retstart) for additional results beyond first page
  */
 
+import { fetchWithRetry } from "@/lib/utils";
+
 const ESEARCH_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
 
 interface ESearchResponse {
@@ -39,7 +41,7 @@ export async function searchGeoIds(query: string): Promise<string[]> {
       sort: "relevance",
     });
 
-    const res = await fetch(`${ESEARCH_BASE}?${params}`);
+    const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
     if (!res.ok) throw new Error(`GEO ESearch HTTP ${res.status}`);
 
     const data = (await res.json()) as ESearchResponse;

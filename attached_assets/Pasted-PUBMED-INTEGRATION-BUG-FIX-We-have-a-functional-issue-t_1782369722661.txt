@@ -1,0 +1,101 @@
+PUBMED INTEGRATION BUG FIX
+
+We have a functional issue that must be fixed before any new development.
+
+Problem: The PubMed integration was reported as working, but from the actual 
+website UI it is not returning papers for ANY topic searched.
+
+Steps to reproduce:
+1. Open the ResearchCoPilot homepage.
+2. Search any topic: breast cancer, tuberculosis, CRISPR off-target effects, 
+   gut microbiome obesity, Alzheimer's disease
+3. Results page loads successfully.
+4. Related Papers section always shows "0 found" / "No papers found for 
+   this topic" — for every query, including extremely common ones.
+
+Expected behavior: Searching a topic should return real PubMed papers with 
+PMID, title, authors, journal, year, abstract preview.
+
+STEP 0 — CONFIRM WHICH BACKEND IS ACTUALLY BEING CALLED (do this FIRST, 
+before any other debugging):
+We have two separate backends in this codebase: the original working 
+Next.js/TypeScript PubMed integration (searchPubMed() etc.), and a separate 
+new Python FastAPI infrastructure skeleton (Phase 2) that has NO real 
+modules registered in its ModuleRegistry yet — it is not supposed to be 
+serving PubMed results at all right now.
+
+Explicitly confirm: does POST /api/analyze call the TypeScript 
+searchPubMed() pipeline directly, or does it forward/proxy the request to 
+the Python FastAPI service? If it is calling or has been changed to call 
+the Python service in any way, that is itself the bug — the Python 
+ModuleRegistry has nothing registered for "pubmed" and will return an 
+empty/not-implemented result for every query, which would exactly explain 
+"0 found" for literally everything. If this is the case, fix /api/analyze 
+to call the TypeScript pipeline directly and do not route PubMed through 
+the Python service.
+
+If /api/analyze is correctly calling the TypeScript pipeline, proceed to 
+the full trace below.
+
+TRACE THE COMPLETE FLOW:
+SearchForm → /results → ResultsContent.tsx → POST /api/analyze → 
+searchPubMed() → PubMed ESearch → PubMed ESummary → PubMed EFetch → 
+API response → UI rendering
+
+Verify, as named findings (not just a summary at the end):
+- Is searchPubMed() actually being called, and with what query string?
+- Does ESearch return PMIDs? How many, for each test query?
+- Does ESummary return metadata for those PMIDs?
+- Does EFetch return abstracts?
+- Does the API route include the papers array in its response, and is it 
+  non-empty at that point?
+- Does ResultsContent.tsx read the papers field with the correct key name?
+- Do the TypeScript interfaces match the actual shape of the API response 
+  (e.g. check for field name mismatches like `papers` vs `results`, or 
+  nested vs flat structures)?
+- At which exact step does the array first become empty, if it does?
+
+Add temporary diagnostic logging at every stage listed above (query 
+received, PMIDs found, papers parsed, papers returned by API, papers 
+received by frontend). Once the root cause is found and fixed, remove this 
+temporary logging entirely — do not leave stray console.log statements in 
+the codebase. If any of this logging is worth keeping permanently, convert 
+it to whatever structured logging convention the rest of the codebase uses, 
+and say explicitly that you did so.
+
+Test with all of: breast cancer, tuberculosis, CRISPR off-target effects, 
+gut microbiome obesity, Alzheimer's disease — confirm the fix works across 
+all five, not just one.
+
+ALSO FIX: the UI currently cannot distinguish "the API call failed/errored" 
+from "this query genuinely has zero PubMed results." Make sure a real 
+backend error surfaces differently in the UI than a legitimate empty 
+result, so this class of bug is visible immediately next time instead of 
+silently looking like "no papers found."
+
+After fixing, verify and report on:
+- Related Papers displays real PubMed results
+- Paper count is greater than zero for all five test queries
+- Links open correctly
+- Abstracts render correctly
+
+Provide a debugging report containing:
+- Exact root cause, stated as which specific layer/file broke (not a vague 
+  summary)
+- Whether the bug involved the Python FastAPI service in any way (per Step 0)
+- Files modified
+- Code changes made
+- Proof that papers now appear in the UI, for all five test queries
+
+IMPORTANT: Do not add new features. Do not start GEO integration. Do not 
+modify FastAPI Phase 2 code (other than confirming, per Step 0, that 
+/api/analyze does not incorrectly route PubMed through it). Only debug and 
+fix the existing PubMed integration until real papers are visible in the 
+frontend for all test queries.
+
+Before making code changes, first identify the root cause and explain it.
+
+If the root cause is uncertain, stop and report findings before modifying code.
+
+Do not rewrite working modules unnecessarily.
+Apply the smallest possible fix that restores correct PubMed results.

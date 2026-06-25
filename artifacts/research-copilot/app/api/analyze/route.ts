@@ -25,6 +25,10 @@ interface AnalyzeResponse {
   projects: string[];
   datasets: Dataset[];
   papers: Paper[];
+  /** Set when PubMed fetch failed (e.g. rate-limited) — distinct from a genuine 0-result query */
+  papersError?: string;
+  /** Set when GEO fetch failed */
+  datasetsError?: string;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -39,11 +43,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const query = body.query.trim();
 
-  // PubMed and GEO run concurrently — neither depends on the other
-  const [papers, datasets] = await Promise.all([
-    searchPubMed(query),     // ESearch → ESummary + EFetch (parallel) → Paper[]
-    searchGeoDatasets(query), // ESearch → ESummary → Dataset[]
-  ]);
+  // Run PubMed first, then GEO sequentially to stay within NCBI's 3 req/s rate limit.
+  // Running them concurrently fires 5 NCBI requests at once and triggers HTTP 429.
+  const { papers, error: papersError } = await searchPubMed(query);
+  const { datasets, error: datasetsError } = await searchGeoDatasets(query);
 
   // Mock data — will be replaced by OpenAI reasoning over papers + datasets
   const result: AnalyzeResponse = {
@@ -69,6 +72,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ],
     datasets,
     papers,
+    ...(papersError && { papersError }),
+    ...(datasetsError && { datasetsError }),
   };
 
   return NextResponse.json(result, { status: 200 });

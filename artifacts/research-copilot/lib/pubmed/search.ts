@@ -9,6 +9,8 @@
  * TODO: Use usehistory=y + WebEnv/query_key for large result sets
  */
 
+import { fetchWithRetry } from "@/lib/utils";
+
 const ESEARCH_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
 
 interface ESearchResponse {
@@ -33,7 +35,7 @@ export async function searchPubMedIds(query: string): Promise<string[]> {
       sort: "relevance",
     });
 
-    const res = await fetch(`${ESEARCH_BASE}?${params}`);
+    const res = await fetchWithRetry(`${ESEARCH_BASE}?${params}`);
     if (!res.ok) throw new Error(`ESearch HTTP ${res.status}`);
 
     const data = (await res.json()) as ESearchResponse;
