@@ -19,10 +19,15 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
 
     # CORS — comma-separated list of allowed origins (also accepts a JSON array)
+    # Supports localhost dev ports and Replit proxy domains via env var override
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
+        "http://localhost:5000",
         "http://localhost:20891",
     ]
+
+    # Replit dev domain — set automatically in the Replit environment
+    REPLIT_DEV_DOMAIN: str | None = None
 
     # Cache TTL: 24 hours by default
     CACHE_TTL_SECONDS: int = 86_400

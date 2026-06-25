@@ -54,9 +54,14 @@ app = FastAPI(
 
 # ── Middleware (added last → executed first) ────────────────────────────────
 
+cors_origins = list(settings.CORS_ORIGINS)
+if settings.REPLIT_DEV_DOMAIN:
+    cors_origins.append(f"https://{settings.REPLIT_DEV_DOMAIN}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.replit\.dev",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
