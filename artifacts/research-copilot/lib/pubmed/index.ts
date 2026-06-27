@@ -3,17 +3,25 @@
  *
  * Full pipeline:
  *
- *   query
+ *   query + limit + offset
  *     ↓  ESearch  (search.ts)           → throws on failure
- *   pmids[]
+ *   { pmids[], totalCount }
  *     ↓  ESummary + EFetch in parallel  (summary.ts / abstract.ts)
  *   summaryData + abstractData
  *     ↓  parser  (parser.ts)
- *   Paper[]  wrapped in ModuleResult<Paper>
+ *   Paper[]  wrapped in ModuleResult<Paper>  (with full pagination metadata)
  *
  * ALL future scientific modules MUST return ModuleResult<T>.
  * See types/module-result.ts for the full interface and status semantics.
  * Future modules to implement: GenBank, ENA, SRA, UniProt, KEGG, Reactome, PDB, AlphaFold.
+ *
+ * NCBI ceiling: retstart + retmax ≤ 9,999 (practical ESearch ceiling for history-less queries).
+ * When offset + limit > 9,999: cap the actual fetch, set hitUpstreamLimit=true.
+ * WebEnv/QueryKey bypass is explicitly deferred to a future phase.
+ *
+ * Rate limit: PubMed costs 3 upstream calls per page (ESearch, ESummary, EFetch in parallel).
+ * GEO costs 2 upstream calls per page (ESearch, ESummary). Account for this when scheduling
+ * concurrent Load More requests — they share the same 3 req/s NCBI rate limit.
  *
  * TODO: Europe PMC    — supplement with full-text search results
  * TODO: GEO           — link relevant expression datasets to papers
@@ -23,10 +31,11 @@
  * TODO: AI summarization — use OpenAI to distill abstracts into plain-language summaries
  * TODO: Keyword extraction — cluster MeSH terms for the Research Landscape section
  * TODO: Citation counts   — integrate iCite API (https://icite.od.nih.gov/api)
+ * TODO: WebEnv/QueryKey  — bypass NCBI ESearch ceiling for very large result sets
  */
 
 import type { Paper } from "@/types/paper";
-import type { ModuleResult } from "@/types/module-result";
+import type { ModuleResult, ExploreOptions } from "@/types/module-result";
 import { buildModuleResult, toModuleError } from "@/types/module-result";
 import { searchPubMedIds } from "./search";
 import { fetchPaperSummaries } from "./summary";
@@ -34,8 +43,25 @@ import { fetchPaperAbstracts } from "./abstract";
 import { parsePubMedResults } from "./parser";
 
 /**
- * Search PubMed for papers matching `query` and return up to 10 Paper objects
- * wrapped in a ModuleResult<Paper>.
+ * NCBI ESearch practical ceiling for history-less (non-WebEnv) queries.
+ *
+ * retstart + retmax must not exceed this value. For queries at or near this limit,
+ * we cap the actual fetch to the available window and set hitUpstreamLimit=true in
+ * the returned ModuleResult. This is NOT a bug — it is a known NCBI API limitation.
+ *
+ * The UI must surface hitUpstreamLimit=true differently from genuine exhaustion:
+ *   "Showing the first N of totalCount results — narrow your search for more specific results."
+ *
+ * Deferred: NCBI WebEnv/QueryKey can paginate beyond this ceiling.
+ * When implemented: set this constant to Infinity (or remove the check) for WebEnv queries.
+ */
+const NCBI_ESEARCH_CEILING = 9999;
+
+/**
+ * Search PubMed for papers matching `query` and return Paper objects wrapped in ModuleResult.
+ *
+ * Accepts ExploreOptions for pagination: limit (default 10) and offset (default 0).
+ * Backward compatible — callers that pass only `query` get limit=10, offset=0.
  *
  * Pipeline: ESearch → ESummary + EFetch (parallel) → parse → ModuleResult<Paper>
  *
@@ -50,20 +76,59 @@ import { parsePubMedResults } from "./parser";
  *
  *   "partial" — ESearch + ESummary succeed (papers have titles/authors/journals/years),
  *               but EFetch fails (papers lack abstract, DOI, MeSH terms, publication types).
- *               data.length > 0; useful partial results exist. Future modules should
- *               follow this pattern: "partial" requires usable data AND at least one failure.
+ *               data.length > 0; useful partial results exist.
  *
  *   "success" — All three stages (ESearch, ESummary, EFetch) succeed and data.length > 0.
+ *
+ * Pagination semantics:
+ *   - hasMore=true  → more records exist beyond this page; nextOffset is set.
+ *   - hasMore=false, hitUpstreamLimit=false → results genuinely exhausted.
+ *   - hasMore=false, hitUpstreamLimit=true  → ceiling hit; more records exist but
+ *     cannot be fetched via retstart/retmax. UI must surface this with a specific message.
  */
-export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> {
+export async function searchPubMed(
+  query: string,
+  options: ExploreOptions = {}
+): Promise<ModuleResult<Paper>> {
   const startedAt = performance.now();
+  const limit = options.limit ?? 10;
+  const offset = options.offset ?? 0;
+
+  // ── Ceiling detection ─────────────────────────────────────────────────────
+  // If this page would push past the NCBI ESearch ceiling, cap what we actually request.
+  // We set hitUpstreamLimit=true so the UI can display the correct end-state message.
+  const wouldExceedCeiling = offset + limit > NCBI_ESEARCH_CEILING;
+  const actualLimit = wouldExceedCeiling
+    ? Math.max(0, NCBI_ESEARCH_CEILING - offset)
+    : limit;
+
+  // If offset is already at or past the ceiling, there is nothing to fetch.
+  if (actualLimit <= 0) {
+    return buildModuleResult({
+      module: "pubmed",
+      status: "empty",
+      data: [],
+      error: null,
+      startedAt,
+      totalCount: undefined, // unknown without fetching; caller should use cached totalCount
+      pageSize: limit,
+      offset,
+      hasMore: false,
+      nextOffset: undefined,
+      currentPage: Math.floor(offset / limit) + 1,
+      hitUpstreamLimit: true,
+    });
+  }
 
   // ── Stage 1: ESearch → PMIDs ─────────────────────────────────────────────
   // searchPubMedIds throws on HTTP error or network failure.
   // If this stage fails → status "error" (no usable data at all).
   let pmids: string[];
+  let totalCount: number;
   try {
-    pmids = await searchPubMedIds(query);
+    const result = await searchPubMedIds(query, actualLimit, offset);
+    pmids = result.pmids;
+    totalCount = result.totalCount;
   } catch (err) {
     return buildModuleResult({
       module: "pubmed",
@@ -71,17 +136,27 @@ export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> 
       data: [],
       error: toModuleError("ESEARCH_FAILED", err),
       startedAt,
+      pageSize: limit,
+      offset,
     });
   }
 
   if (pmids.length === 0) {
-    // ESearch succeeded but found 0 matching PMIDs → genuinely empty result set
+    // ESearch succeeded but found 0 matching PMIDs → genuinely empty result set.
     return buildModuleResult({
       module: "pubmed",
       status: "empty",
       data: [],
       error: null,
       startedAt,
+      totalCount,
+      pageSize: limit,
+      offset,
+      hasMore: false,
+      nextOffset: undefined,
+      currentPage: Math.floor(offset / limit) + 1,
+      totalPages: Math.ceil(totalCount / limit) || 0,
+      hitUpstreamLimit: wouldExceedCeiling,
     });
   }
 
@@ -107,12 +182,25 @@ export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> 
       data: [],
       error: toModuleError("ESUMMARY_FAILED", summarySettled.reason),
       startedAt,
+      totalCount,
+      pageSize: limit,
+      offset,
     });
   }
 
   const summaryData = summarySettled.value;
   const abstractData = efetchFailed ? {} : abstractSettled.value;
   const papers = parsePubMedResults(summaryData, abstractData);
+
+  // ── Compute pagination metadata ───────────────────────────────────────────
+  // hasMore = there are more records upstream beyond this page.
+  // nextOffset = offset + records returned on this page (may be < limit on final page).
+  const returnedCount = papers.length;
+  const genuinelyExhausted = offset + returnedCount >= totalCount;
+  const hasMore = !wouldExceedCeiling && !genuinelyExhausted;
+  const nextOffset = hasMore ? offset + returnedCount : undefined;
+  const currentPage = Math.floor(offset / limit) + 1;
+  const totalPages = Math.ceil(totalCount / limit);
 
   if (efetchFailed) {
     // ESearch + ESummary succeeded, EFetch failed.
@@ -125,6 +213,14 @@ export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> 
       data: papers,
       error: toModuleError("EFETCH_FAILED", abstractSettled.reason),
       startedAt,
+      totalCount,
+      pageSize: limit,
+      offset,
+      hasMore,
+      nextOffset,
+      currentPage,
+      totalPages,
+      hitUpstreamLimit: wouldExceedCeiling,
     });
   }
 
@@ -135,6 +231,14 @@ export async function searchPubMed(query: string): Promise<ModuleResult<Paper>> 
     data: papers,
     error: null,
     startedAt,
+    totalCount,
+    pageSize: limit,
+    offset,
+    hasMore,
+    nextOffset,
+    currentPage,
+    totalPages,
+    hitUpstreamLimit: wouldExceedCeiling || undefined,
   });
 }
 

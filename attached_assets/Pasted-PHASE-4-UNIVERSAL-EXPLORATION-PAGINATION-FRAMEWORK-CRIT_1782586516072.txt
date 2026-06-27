@@ -1,0 +1,285 @@
+PHASE 4 — UNIVERSAL EXPLORATION / PAGINATION FRAMEWORK
+
+CRITICAL CONTEXT — READ BEFORE STARTING ANY CODE:
+
+1. RATE LIMIT INTERACTION: Our shared NCBI Entrez rate limiter is 3 req/sec 
+   (10 req/sec with an API key), shared across PubMed and GEO. "Load More" 
+   pagination means every click is a brand-new set of upstream API calls. 
+   Rapid clicking (or impatient double-clicking) WILL hit this rate limit. 
+   This phase MUST include: disabling the Load More button while a request 
+   is in flight, and a visible loading state, so a user physically cannot 
+   fire overlapping requests for the same section. This is not optional UI 
+   polish — without it, pagination will intermittently fail in a way that 
+   looks identical to the kind of silent bug we already spent days 
+   debugging once before.
+
+2. NCBI'S ACTUAL PAGINATION MECHANISM AND ITS HARD CEILING: NCBI E-utilities 
+   paginate via retstart/retmax, which our limit/offset will map onto 
+   (offset → retstart, limit → retmax). However, NCBI ESearch has a 
+   practical ceiling around retstart + retmax ≈ 9,999–10,000 for the 
+   default history-less approach. For a broad query like "breast cancer" 
+   (which can have 100,000+ matching papers), a user clicking Load More 
+   repeatedly WILL eventually hit this ceiling long before reaching the 
+   true totalCount. This is a real NCBI limitation, not a bug — but it must 
+   be surfaced correctly: 
+   - "hasMore == false because we've shown every available result" and 
+   - "hasMore == false because we've hit NCBI's pagination ceiling, even 
+     though totalCount shows more exist" 
+   are two different states. Do not conflate them. If reaching the ceiling, 
+   the UI should say something like "Showing the first 10,000 of 203,451 
+   results — narrow your search to see more specific results" rather than 
+   the generic "you've reached the end" message, which would be misleading.
+
+3. Confirm whether implementing NCBI's WebEnv/QueryKey history-server 
+   mechanism (which allows paginating beyond the retstart/retmax ceiling) 
+   is in scope for this phase or explicitly deferred. Given the goal is 
+   "one or two hours of work," I'd default to: deferred, document it as a 
+   known limitation in the final report, and only implement the 
+   retstart/retmax-based pagination up to the practical ceiling for now.
+
+--------------------------------------------------
+
+Goal
+
+ResearchCoPilot is no longer a simple search application. It is becoming a 
+research exploration platform.
+
+Currently every module (PubMed and GEO) returns only the first 10 results. 
+This phase removes that architectural limitation by building one reusable 
+exploration framework that ALL present and future scientific modules will 
+use — PubMed, GEO, GenBank, ENA, SRA, UniProt, KEGG, Reactome, PDB, 
+AlphaFold — without requiring each module to invent its own pagination logic.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify:
+- Python FastAPI service
+- Redis
+- Rate Limiter logic itself (you may call the existing limiter more 
+  frequently as pagination naturally requires, but do not change its 
+  configuration or algorithm)
+- Cache
+- AI
+- Existing business logic
+- Existing parsing logic
+- Existing retry logic
+
+Do NOT redesign the UI beyond what's specified in Step 6.
+This phase is an architectural enhancement.
+
+--------------------------------------------------
+
+OBJECTIVE
+
+Instead of: Search → Return first 10 results → Stop
+
+ResearchCoPilot should become: Search → Overview → Explore → Load More → 
+Continue browsing → Open records → Download
+
+The user should be able to continue exploring available results until 
+either the database is exhausted OR a real upstream limitation (see point 2 
+above) is reached — and the UI must tell the user honestly which of those 
+two happened.
+
+--------------------------------------------------
+
+STEP 1 — Extend ModuleResult
+
+Extend the existing ModuleResult<T> interface. Do NOT break backward 
+compatibility. Add:
+
+- totalCount
+- pageSize
+- offset
+- hasMore
+- nextOffset
+- currentPage
+- totalPages (when applicable)
+- hitUpstreamLimit (boolean, optional) — true when hasMore is false 
+  specifically because an upstream API ceiling was hit (see Critical 
+  Context point 2), not because results were genuinely exhausted
+
+These fields should be optional where an upstream API cannot provide them. 
+Document every field with JSDoc, including hitUpstreamLimit's purpose.
+
+--------------------------------------------------
+
+STEP 2 — Universal Exploration Contract
+
+Every scientific module must eventually support exactly the same 
+exploration interface: query, limit, offset (or equivalent). Do NOT 
+implement future modules. Only standardize the interface.
+
+--------------------------------------------------
+
+STEP 3 — PubMed Refactor
+
+Update the PubMed search pipeline to accept limit and offset, mapping them 
+to NCBI's retstart/retmax. Return ModuleResult<Paper> with totalCount, 
+hasMore, hitUpstreamLimit, etc. Reuse the existing architecture. Do NOT 
+rewrite working parsing logic. Be aware PubMed's pipeline is three upstream 
+calls per page (ESearch, ESummary, EFetch) — each Load More click costs 
+three calls against the shared rate limit, not one.
+
+--------------------------------------------------
+
+STEP 4 — GEO Refactor
+
+Same architectural change for GEO: accept limit and offset, return 
+ModuleResult<GeoDataset> with exploration metadata. Do NOT rewrite GEO 
+parsing. GEO's pipeline is two upstream calls per page (ESearch, ESummary), 
+not three — account for this difference in any shared rate-limit-aware 
+logic rather than assuming PubMed and GEO cost the same per page.
+
+--------------------------------------------------
+
+STEP 5 — API Layer
+
+Update app/api/analyze/route.ts to support query, limit, offset. Maintain 
+backward compatibility — if the frontend sends nothing, default to limit=10, 
+offset=0.
+
+--------------------------------------------------
+
+STEP 6 — Frontend
+
+Do NOT redesign the page. Add minimal exploration controls:
+- A "Load More" button per section (PubMed, GEO)
+- The button MUST be disabled while a request for that section is in 
+  flight, with a visible loading indicator — see Critical Context point 1
+- On click: retrieve the next page, append results, preserve already-loaded 
+  results, do NOT reload the page, do NOT clear existing results, maintain 
+  scroll position
+
+--------------------------------------------------
+
+STEP 7 — Result Summary
+
+Above every section display, e.g.:
+PubMed — 203,451 papers found — Showing 1–10
+GEO — 2,143 datasets found — Showing 11–20
+
+Update automatically after every Load More.
+
+--------------------------------------------------
+
+STEP 8 — End of Results (two distinct end states)
+
+When hasMore == false AND hitUpstreamLimit is false/absent: disable Load 
+More, display "You've reached the end of available results."
+
+When hasMore == false AND hitUpstreamLimit == true: disable Load More, 
+display something like "Showing the first [N] of [totalCount] results — try 
+narrowing your search for more specific results" — do NOT show the generic 
+"reached the end" message in this case, since more results genuinely exist 
+upstream.
+
+Do not continue sending API requests once either end state is reached.
+
+--------------------------------------------------
+
+STEP 9 — Error Handling
+
+If page 1 succeeds but a later page fails: previously loaded results MUST 
+remain visible. Only the new request should show an error/retry state. Do 
+not erase previously loaded records. Provide a visible "Retry" action for 
+the failed page specifically (not a full page reload).
+
+--------------------------------------------------
+
+STEP 10 — Validation (include the failure case, not just the happy path)
+
+PubMed — query "breast cancer": load pages at offsets 0, 10, 20, 30. Verify 
+total count, correct ordering, no duplicates, no missing papers across page 
+boundaries.
+
+GEO — queries: breast cancer, Alzheimer's, tuberculosis, CRISPR, 
+Arabidopsis. Verify Load More works, no duplicate datasets, correct total 
+count, correct stopping point (and correctly distinguishes the two Step 8 
+end states where applicable).
+
+ALSO explicitly test and report on: simulate or force a page-2 failure 
+(e.g. a temporary network error or invalid offset) after a successful page 
+1, and confirm page 1's results are still visible and a retry option is 
+shown — per Step 9. Do not skip this test; it is the scenario most likely 
+to silently break.
+
+ALSO test: rapid repeated clicking of Load More (simulate at least 3 quick 
+clicks) and confirm only one request fires at a time per the Step 6 
+disabled-state requirement, rather than firing 3 overlapping requests.
+
+--------------------------------------------------
+
+STEP 11 — Performance
+
+Do not preload thousands of records. Only request the next page when 
+needed (i.e., on click, not speculatively). Keep memory usage bounded. Do 
+not re-request already-loaded pages.
+
+--------------------------------------------------
+STEP 11.5 - Duplicate Prevention 
+
+When appending newly loaded records to the existing results,
+deduplicate using the record's unique identifier.
+
+PubMed:
+PMID
+
+GEO:
+GSE accession
+
+Future:
+GenBank → accession
+ENA → accession
+SRA → SRR/SRX/SRP
+
+If an upstream API returns overlapping records across adjacent pages
+(or a retry returns the same page twice),
+the UI must never display duplicates.
+
+Append only previously unseen records.
+
+Document the deduplication strategy in the final report.
+-------------------------------------------------------
+
+STEP 12 — Future Compatibility
+
+Future Enhancement
+Virtual scrolling / windowed rendering for very large result sets.
+Not implemented in this phase.
+
+Document that GenBank, ENA, SRA, UniProt, KEGG, Reactome must implement 
+exactly the same exploration interface, including the hitUpstreamLimit 
+concept where the relevant upstream API has an equivalent ceiling. No 
+future module should invent its own pagination system.
+
+
+--------------------------------------------------
+
+STEP 13 — Final Report
+
+Report:
+- Files modified
+- Architecture changes
+- New ModuleResult fields
+- API changes
+- Frontend changes
+- Validation results — including the page-2-failure test and the 
+  rapid-click test, with actual pass/fail, not a blanket "works"
+- Whether the NCBI retstart/retmax ceiling was hit during testing for any 
+  broad query, and how it was surfaced to the user
+- Whether WebEnv/QueryKey-based pagination (for going beyond the ceiling) 
+  was implemented or deliberately deferred (expected: deferred — confirm 
+  this explicitly either way)
+- Performance considerations
+- Future compatibility
+
+Confirm:
+- No PubMed regression
+- No GEO regression
+- No Python changes
+- No AI changes
+- Only the universal exploration framework was added
+-

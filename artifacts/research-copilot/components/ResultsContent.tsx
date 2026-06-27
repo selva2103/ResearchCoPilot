@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
 
@@ -12,18 +12,33 @@ import type { Dataset } from "@/types/dataset";
 // TODO: GEO pipeline is live (ESearch → ESummary → Dataset[]).
 // Future: supplement with SRA, ArrayExpress, TCGA, Europe PMC.
 
+// ─── Shared API types ─────────────────────────────────────────────────────────
+
+interface PaginationMeta {
+  totalCount: number;
+  pageSize: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  currentPage: number;
+  totalPages: number;
+  hitUpstreamLimit: boolean;
+}
+
 interface AnalysisResponse {
   landscape: string[];
   emergingAreas: string[];
   researchGaps: string[];
   projects: string[];
-  datasets: Dataset[];
   papers: Paper[];
-  /** Set when PubMed fetch failed — distinct from a genuine zero-result query */
+  papersMeta: PaginationMeta | null;
+  datasets: Dataset[];
+  datasetsMeta: PaginationMeta | null;
   papersError?: string;
-  /** Set when GEO fetch failed */
   datasetsError?: string;
 }
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ResultsContent() {
   const searchParams = useSearchParams();
@@ -31,30 +46,166 @@ export default function ResultsContent() {
   const q = searchParams.get("q") ?? "";
 
   const [query, setQuery] = useState(q);
-  const [data, setData] = useState<AnalysisResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
+  // Static content (AI cards) — only set on initial load
+  const [staticData, setStaticData] = useState<Pick<
+    AnalysisResponse,
+    "landscape" | "emergingAreas" | "researchGaps" | "projects"
+  > | null>(null);
+
+  // Initial load state
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [initialError, setInitialError] = useState<string | null>(null);
+  const [initialLoaded, setInitialLoaded] = useState(false);
+
+  // ── Papers state ──────────────────────────────────────────────────────────
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [papersMeta, setPapersMeta] = useState<PaginationMeta | null>(null);
+  const [papersLoading, setPapersLoading] = useState(false);
+  // papersPageError: only the latest failed Load More — page 1 results remain visible
+  const [papersPageError, setPapersPageError] = useState<string | null>(null);
+  // The nextOffset to retry when papersPageError is set
+  const papersRetryOffset = useRef<number | null>(null);
+
+  // ── Datasets state ────────────────────────────────────────────────────────
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasetsMeta, setDatasetsMeta] = useState<PaginationMeta | null>(null);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetsPageError, setDatasetsPageError] = useState<string | null>(null);
+  const datasetsRetryOffset = useRef<number | null>(null);
+
+  // ── Initial load ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!q.trim()) return;
 
-    setIsLoading(true);
-    setError(null);
-    setData(null);
+    setInitialLoading(true);
+    setInitialError(null);
+    setInitialLoaded(false);
+    setStaticData(null);
+    setPapers([]);
+    setPapersMeta(null);
+    setDatasets([]);
+    setDatasetsMeta(null);
+    setPapersPageError(null);
+    setDatasetsPageError(null);
 
     fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, limit: 10 }),
     })
       .then((res) => {
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
         return res.json() as Promise<AnalysisResponse>;
       })
-      .then((json) => setData(json))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setIsLoading(false));
+      .then((json) => {
+        setStaticData({
+          landscape: json.landscape,
+          emergingAreas: json.emergingAreas,
+          researchGaps: json.researchGaps,
+          projects: json.projects,
+        });
+        setPapers(json.papers);
+        setPapersMeta(json.papersMeta);
+        setDatasets(json.datasets);
+        setDatasetsMeta(json.datasetsMeta);
+        setInitialLoaded(true);
+      })
+      .catch((err: Error) => setInitialError(err.message))
+      .finally(() => setInitialLoading(false));
   }, [q]);
+
+  // ── Load More Papers ──────────────────────────────────────────────────────
+  const loadMorePapers = async (offsetOverride?: number) => {
+    // Guard: do not fire while another papers request is in flight.
+    // This enforces the spec requirement: "a user physically cannot fire overlapping requests."
+    if (papersLoading) return;
+
+    const nextOffset = offsetOverride ?? papersMeta?.nextOffset;
+    if (nextOffset == null) return;
+
+    setPapersLoading(true);
+    setPapersPageError(null);
+    papersRetryOffset.current = nextOffset;
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: q,
+          limit: 10,
+          papersOffset: nextOffset,
+          datasetsOffset: 0, // ensures server runs only PubMed
+        }),
+      });
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const json = (await res.json()) as AnalysisResponse;
+
+      const newPapers = json.papers ?? [];
+
+      // ── Deduplication: papers by PMID ────────────────────────────────────
+      // If the upstream API returns overlapping records across page boundaries,
+      // or a retry returns the same page twice, only append previously unseen records.
+      setPapers((prev) => {
+        const seenPmids = new Set(prev.map((p) => p.pmid));
+        const uniqueNew = newPapers.filter((p) => !seenPmids.has(p.pmid));
+        return [...prev, ...uniqueNew];
+      });
+
+      if (json.papersMeta) setPapersMeta(json.papersMeta);
+      papersRetryOffset.current = null;
+    } catch (err) {
+      // Step 9: previously loaded results remain visible; only this request shows the error.
+      // The retry button will re-attempt from the same offset.
+      setPapersPageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPapersLoading(false);
+    }
+  };
+
+  // ── Load More Datasets ────────────────────────────────────────────────────
+  const loadMoreDatasets = async (offsetOverride?: number) => {
+    if (datasetsLoading) return;
+
+    const nextOffset = offsetOverride ?? datasetsMeta?.nextOffset;
+    if (nextOffset == null) return;
+
+    setDatasetsLoading(true);
+    setDatasetsPageError(null);
+    datasetsRetryOffset.current = nextOffset;
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: q,
+          limit: 10,
+          datasetsOffset: nextOffset,
+          papersOffset: 0, // ensures server runs only GEO
+        }),
+      });
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const json = (await res.json()) as AnalysisResponse;
+
+      const newDatasets = json.datasets ?? [];
+
+      // ── Deduplication: datasets by accession (GSE ID) ────────────────────
+      setDatasets((prev) => {
+        const seenAccessions = new Set(prev.map((d) => d.accession));
+        const uniqueNew = newDatasets.filter((d) => !seenAccessions.has(d.accession));
+        return [...prev, ...uniqueNew];
+      });
+
+      if (json.datasetsMeta) setDatasetsMeta(json.datasetsMeta);
+      datasetsRetryOffset.current = null;
+    } catch (err) {
+      setDatasetsPageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDatasetsLoading(false);
+    }
+  };
 
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -91,7 +242,7 @@ export default function ResultsContent() {
           />
           <button
             type="submit"
-            disabled={!query.trim() || isLoading}
+            disabled={!query.trim() || initialLoading}
             className="rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold px-6 py-3 text-sm shadow-sm transition-all"
           >
             Analyze
@@ -100,66 +251,241 @@ export default function ResultsContent() {
       </div>
 
       {!q && <EmptyState />}
-      {q && isLoading && <LoadingState />}
-      {q && error && <ErrorCard message={error} />}
+      {q && initialLoading && <LoadingState />}
+      {q && initialError && <ErrorCard message={initialError} />}
 
-      {q && data && !isLoading && (
+      {q && initialLoaded && staticData && (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
           <ResultSection
             icon="🧬"
             title="Research Landscape"
             color="blue"
-            items={data.landscape}
+            items={staticData.landscape}
             itemType="topic"
           />
           <ResultSection
             icon="🚀"
             title="Emerging Areas"
             color="purple"
-            items={data.emergingAreas}
+            items={staticData.emergingAreas}
             itemType="area"
           />
           <ResultSection
             icon="🔍"
             title="Research Gaps"
             color="indigo"
-            items={data.researchGaps}
+            items={staticData.researchGaps}
             itemType="gap"
           />
           <ResultSection
             icon="💡"
             title="Suggested Projects"
             color="emerald"
-            items={data.projects}
+            items={staticData.projects}
             itemType="project"
           />
-          <DatasetsSection datasets={data.datasets} error={data.datasetsError} />
-          <PapersSection papers={data.papers} error={data.papersError} />
+
+          <DatasetsSection
+            datasets={datasets}
+            meta={datasetsMeta}
+            isLoading={datasetsLoading}
+            pageError={datasetsPageError}
+            retryOffset={datasetsRetryOffset.current}
+            onLoadMore={() => loadMoreDatasets()}
+            onRetry={(offset) => loadMoreDatasets(offset)}
+          />
+
+          <PapersSection
+            papers={papers}
+            meta={papersMeta}
+            isLoading={papersLoading}
+            pageError={papersPageError}
+            retryOffset={papersRetryOffset.current}
+            onLoadMore={() => loadMorePapers()}
+            onRetry={(offset) => loadMorePapers(offset)}
+          />
         </div>
       )}
     </div>
   );
 }
 
+// ─── Result summary line ──────────────────────────────────────────────────────
+
+function ResultSummary({
+  label,
+  meta,
+  shownCount,
+}: {
+  label: string;
+  meta: PaginationMeta | null;
+  shownCount: number;
+}) {
+  if (!meta) return null;
+
+  const from = 1;
+  const to = shownCount;
+  const total = meta.totalCount.toLocaleString();
+
+  return (
+    <p className="text-xs text-slate-400 dark:text-slate-500 px-5 py-2 border-b border-slate-100 dark:border-slate-700/50">
+      {label} — <span className="font-medium text-slate-600 dark:text-slate-300">{total}</span>{" "}
+      found — Showing {from}–{to}
+    </p>
+  );
+}
+
+// ─── Load More / end-state footer ────────────────────────────────────────────
+
+function ExplorationFooter({
+  meta,
+  isLoading,
+  pageError,
+  retryOffset,
+  onLoadMore,
+  onRetry,
+  accentColor,
+  dataLabel,
+}: {
+  meta: PaginationMeta | null;
+  isLoading: boolean;
+  pageError: string | null;
+  retryOffset: number | null;
+  onLoadMore: () => void;
+  onRetry: (offset: number) => void;
+  accentColor: string;
+  dataLabel: string;
+}) {
+  // Step 9: if a page-N request failed, show inline error + retry for THAT page only.
+  // Previously loaded records are not cleared.
+  if (pageError) {
+    return (
+      <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-700/50 space-y-2">
+        <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+          ⚠️ Failed to load next page — previous results preserved.
+        </p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">{pageError}</p>
+        {retryOffset !== null && (
+          <button
+            onClick={() => onRetry(retryOffset)}
+            disabled={isLoading}
+            className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-3 py-1.5 rounded-full hover:bg-amber-200 dark:hover:bg-amber-900/50 disabled:opacity-50 font-medium transition-colors"
+          >
+            {isLoading ? "Retrying…" : "Retry"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (!meta) return null;
+
+  // Step 8a: genuinely exhausted — no more records upstream.
+  if (!meta.hasMore && !meta.hitUpstreamLimit) {
+    return (
+      <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50 text-center">
+        <p className="text-xs text-slate-400 dark:text-slate-500">
+          You&rsquo;ve reached the end of available {dataLabel}.
+        </p>
+      </div>
+    );
+  }
+
+  // Step 8b: upstream ceiling hit — more records exist but cannot be paged further.
+  if (!meta.hasMore && meta.hitUpstreamLimit) {
+    return (
+      <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50 text-center">
+        <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+          Showing the first {meta.totalCount >= 9999 ? "~9,999" : meta.totalCount.toLocaleString()} of{" "}
+          {meta.totalCount.toLocaleString()} results
+        </p>
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+          Try narrowing your search for more specific results.
+        </p>
+      </div>
+    );
+  }
+
+  // Load More is available.
+  return (
+    <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-700/50 flex items-center justify-between">
+      <button
+        onClick={onLoadMore}
+        // CRITICAL: disabled while in-flight — prevents overlapping requests (spec Step 6).
+        disabled={isLoading}
+        className={`text-xs font-semibold px-4 py-2 rounded-full transition-all disabled:opacity-50 ${accentColor}`}
+      >
+        {isLoading ? (
+          <span className="flex items-center gap-2">
+            <LoadingSpinner />
+            Loading…
+          </span>
+        ) : (
+          "Load More"
+        )}
+      </button>
+      <p className="text-xs text-slate-400 dark:text-slate-500">
+        {meta.totalCount.toLocaleString()} total
+      </p>
+    </div>
+  );
+}
+
+function LoadingSpinner() {
+  return (
+    <svg
+      className="animate-spin h-3 w-3"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+      />
+    </svg>
+  );
+}
+
 // ─── Dataset Recommendations card ────────────────────────────────────────────
 
-function DatasetsSection({ datasets, error }: { datasets: Dataset[]; error?: string }) {
+function DatasetsSection({
+  datasets,
+  meta,
+  isLoading,
+  pageError,
+  retryOffset,
+  onLoadMore,
+  onRetry,
+}: {
+  datasets: Dataset[];
+  meta: PaginationMeta | null;
+  isLoading: boolean;
+  pageError: string | null;
+  retryOffset: number | null;
+  onLoadMore: () => void;
+  onRetry: (offset: number) => void;
+}) {
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/60 overflow-hidden shadow-sm backdrop-blur-sm">
       <div className="bg-violet-600 px-5 py-4 flex items-center gap-2">
         <span className="text-xl">🗄️</span>
         <h3 className="font-semibold text-white text-base">Dataset Recommendations</h3>
+        {isLoading && (
+          <span className="ml-1 text-violet-200">
+            <LoadingSpinner />
+          </span>
+        )}
         <span className="ml-auto text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
-          {datasets.length} found
+          {datasets.length} shown
         </span>
       </div>
 
-      {error && datasets.length === 0 ? (
-        <div className="px-5 py-5 text-center space-y-1">
-          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">⚠️ Fetch error</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{error}</p>
-        </div>
-      ) : datasets.length === 0 ? (
+      <ResultSummary label="GEO" meta={meta} shownCount={datasets.length} />
+
+      {datasets.length === 0 ? (
         <div className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
           No datasets found for this topic.
         </div>
@@ -170,6 +496,17 @@ function DatasetsSection({ datasets, error }: { datasets: Dataset[]; error?: str
           ))}
         </ul>
       )}
+
+      <ExplorationFooter
+        meta={meta}
+        isLoading={isLoading}
+        pageError={pageError}
+        retryOffset={retryOffset}
+        onLoadMore={onLoadMore}
+        onRetry={onRetry}
+        accentColor="bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900/50"
+        dataLabel="datasets"
+      />
 
       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50">
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
@@ -187,7 +524,6 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
       : ds.summary
     : null;
 
-  // Format publicationDate "YYYY-MM-DD" → "Mon YYYY"
   const formattedDate = ds.publicationDate
     ? (() => {
         const d = new Date(ds.publicationDate + "T00:00:00Z");
@@ -197,7 +533,6 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
       })()
     : null;
 
-  // Shorten experimentType for badge display
   const shortExperimentType = ds.experimentType
     ? ds.experimentType
         .replace("Expression profiling by high throughput sequencing", "RNA-Seq")
@@ -224,7 +559,6 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
           </p>
         )}
 
-        {/* Core badges */}
         <div className="flex flex-wrap gap-2 pt-0.5">
           <span className="text-xs bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-2 py-0.5 rounded-full font-mono font-medium">
             {ds.accession}
@@ -252,7 +586,6 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
           )}
         </div>
 
-        {/* Links row */}
         <div className="flex flex-wrap gap-2 pt-0.5">
           {ds.geoUrl && (
             <a
@@ -326,23 +659,41 @@ function DatasetItem({ dataset: ds }: { dataset: Dataset }) {
 
 // ─── Related Papers card ──────────────────────────────────────────────────────
 
-function PapersSection({ papers, error }: { papers: Paper[]; error?: string }) {
+function PapersSection({
+  papers,
+  meta,
+  isLoading,
+  pageError,
+  retryOffset,
+  onLoadMore,
+  onRetry,
+}: {
+  papers: Paper[];
+  meta: PaginationMeta | null;
+  isLoading: boolean;
+  pageError: string | null;
+  retryOffset: number | null;
+  onLoadMore: () => void;
+  onRetry: (offset: number) => void;
+}) {
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/60 overflow-hidden shadow-sm backdrop-blur-sm">
       <div className="bg-rose-600 px-5 py-4 flex items-center gap-2">
         <span className="text-xl">📚</span>
         <h3 className="font-semibold text-white text-base">Related Papers</h3>
+        {isLoading && (
+          <span className="ml-1 text-rose-200">
+            <LoadingSpinner />
+          </span>
+        )}
         <span className="ml-auto text-xs font-medium px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
-          {papers.length} found
+          {papers.length} shown
         </span>
       </div>
 
-      {error && papers.length === 0 ? (
-        <div className="px-5 py-5 text-center space-y-1">
-          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">⚠️ Fetch error</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{error}</p>
-        </div>
-      ) : papers.length === 0 ? (
+      <ResultSummary label="PubMed" meta={meta} shownCount={papers.length} />
+
+      {papers.length === 0 ? (
         <div className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
           No papers found for this topic.
         </div>
@@ -353,6 +704,17 @@ function PapersSection({ papers, error }: { papers: Paper[]; error?: string }) {
           ))}
         </ul>
       )}
+
+      <ExplorationFooter
+        meta={meta}
+        isLoading={isLoading}
+        pageError={pageError}
+        retryOffset={retryOffset}
+        onLoadMore={onLoadMore}
+        onRetry={onRetry}
+        accentColor="bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 hover:bg-rose-200 dark:hover:bg-rose-900/50"
+        dataLabel="papers"
+      />
 
       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50">
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
