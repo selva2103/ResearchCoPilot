@@ -1,0 +1,350 @@
+PHASE 5.1 — SEQUENCE FOUNDATION (GENBANK PROVIDER)
+
+CRITICAL CONTEXT — READ BEFORE WRITING ANY CODE
+
+The Sequence Layer is NOT a GenBank application. It is a unified biological 
+resource layer that will later be populated by multiple providers: 
+GenBank, RefSeq, ENA, SRA, UniProt, AlphaFold, KEGG, Reactome.
+
+Phase 5.1 implements ONLY the first provider: GenBank (which, per the 
+resolution rules below, will in practice often surface RefSeq records as 
+the preferred result — RefSeq and GenBank are both accessed through the 
+same NCBI nucleotide infrastructure, so "GenBank provider" here means "the 
+NCBI nucleotide/sequence pipeline," not "GenBank-only, excluding RefSeq").
+
+Do NOT design the architecture around GenBank-specific objects. Design a 
+generic SequenceResource model that future providers can enrich without 
+changing the frontend.
+
+--------------------------------------------------
+
+EXPLICIT RESOLUTION RULES (DO NOT IMPROVISE THESE PER QUERY)
+
+These three rules must be implemented as fixed, deterministic logic — not 
+as case-by-case judgment calls that could behave differently for different 
+queries. If real API responses make any rule below unworkable, stop and 
+report that explicitly rather than silently substituting your own heuristic.
+
+RULE 1 — RefSeq vs GenBank preference:
+When both a RefSeq record and a GenBank/INSDC record exist for the same 
+entity, RefSeq is the preferred/primary result. RefSeq is NCBI's curated, 
+non-redundant reference set; GenBank is the primary submission archive and 
+often contains multiple redundant or historical entries for the same gene 
+or genome. Use GenBank as the result only when no RefSeq entry exists for 
+that entity (common for less-studied organisms). When a GenBank-only result 
+is returned, the referenceStatus field should reflect that no RefSeq 
+equivalent was found, not silently omit this.
+
+RULE 2 — Multiple assembly handling:
+For genome-level queries, prefer NCBI's flagged "reference genome" status, 
+falling back to "representative genome" status, falling back to other 
+available assemblies, in that priority order. Do NOT pick the first result 
+returned by ESearch as a default — NCBI's result ordering is not a 
+proxy for assembly quality/status, and treating it as one will produce 
+non-reproducible results between identical queries run on different days. 
+If multiple assemblies of genuinely comparable/tied status exist, return 
+the top one as primaryAccession and list up to 2-3 alternates in 
+availableResources rather than picking arbitrarily and hiding the rest.
+
+RULE 3 — Sequence-type ambiguity / gene-symbol queries (e.g. "TP53"):
+When a query resolves to a gene symbol (rather than an organism name, 
+accession, or assembly name), the resolution is: identify it as a gene 
+first, then return the gene's best-supported RefSeq genomic sequence record 
+(per Rule 1) as the primary SequenceResource. Do NOT fetch or fully resolve 
+mRNA/protein records in this phase — instead, flag mRNA and Protein as 
+available: true with an estimatedCount in availableResources, matching this 
+phase's stated scope ("what resources exist," not "download everything"). 
+This is the single rule for gene-symbol queries — apply it consistently 
+across every gene-symbol query tested in Step 10, and call out in the final 
+report if any tested query behaved differently from this rule and why.
+
+For organism-name queries (e.g. "Mycobacterium tuberculosis H37Rv", 
+"SARS-CoV-2"), apply Rule 2 (assembly handling) as the primary resolution 
+path instead.
+
+For accession-number queries, resolve directly to that accession's record, 
+applying Rule 1 only if the given accession has a known RefSeq equivalent 
+to surface as an alternate.
+
+--------------------------------------------------
+
+PRE-CODE INSPECTION (MANDATORY)
+
+Before implementing anything, inspect the live NCBI Entrez APIs. Do NOT 
+assume the API structure. Inspect real responses for at least these queries:
+- TP53
+- Mycobacterium tuberculosis H37Rv
+- Homo sapiens BRCA1
+- SARS-CoV-2
+- Arabidopsis thaliana
+
+Inspect ESearch, ESummary, EFetch. Determine: actual response structure, 
+accession types, RefSeq identifiers, GenBank identifiers, molecule types, 
+available download formats, and — specifically — whether NCBI's response 
+includes a usable flag distinguishing "reference genome" / "representative 
+genome" / other status (needed for Rule 2) and a clean way to identify 
+RefSeq vs GenBank accessions for the same entity (needed for Rule 1).
+
+Determine which NCBI Entrez database(s) are actually required for each
+query resolution path.
+
+Do NOT assume that all queries should use the same Entrez database.
+
+Examples include (but are not limited to):
+
+- nuccore
+- gene
+- assembly
+- genome
+
+Choose the appropriate database(s) based on observed live API responses,
+not assumptions.
+
+In the Final Report, explicitly document:
+
+- Which Entrez database(s) were selected.
+- Why each database was chosen.
+- Which query types use which database.
+- Whether multiple databases were required for different query categories.
+
+If a different database proves more appropriate than originally expected,
+document the reason before implementing the parser.
+
+Build the parser from the observed schema. If live responses differ from 
+expectations, or if the data needed for Rules 1-3 isn't cleanly available 
+in the response, document this explicitly before coding rather than 
+approximating it.
+
+--------------------------------------------------
+
+GOAL
+
+Build the Sequence Foundation. This phase should answer one question: 
+"What sequence resources exist for this search?" 
+
+NOT "download every gene." NOT "download every transcript." NOT "download 
+every protein." Those belong to later phases (5.2+).
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, PubMed, GEO, 
+Universal Exploration Framework, AI, existing frontend layout.
+
+Do NOT attempt to retrieve every feature from large genomes. The purpose 
+of Phase 5.1 is to establish the Sequence Foundation only — metadata and 
+availability, not full feature extraction. Future phases will progressively 
+expand genes, transcripts, CDS, and proteins on demand, using the 
+availableResources section built in Step 3 as the entry point.
+
+Reuse: ModuleResult<T>, Universal Exploration Framework, Load More, 
+Pagination, Retry logic.
+
+--------------------------------------------------
+
+STEP 1 — SequenceResource
+
+Create a generic SequenceResource interface. Must NOT contain 
+GenBank-specific names. Suggested structure: primaryAccession, 
+resourceIdentifier, identifierScheme, resourceCategory, organism, 
+taxonomy, assembly, assemblyLevel, referenceStatus, moleculeType, 
+topology, sequenceLength, sequenceLengthUnit, description, sourceDatabase, 
+downloads, availableResources. All fields strongly typed, optional where 
+appropriate, every field documented. referenceStatus should be able to 
+express "RefSeq reference genome," "RefSeq representative genome," 
+"GenBank, no RefSeq equivalent found," etc. — per Rule 1.
+
+resourceIdentifier and identifierScheme (NEW — added per review):
+Do not let primaryAccession silently mean different things across 
+providers (an NCBI accession today, a UniProt ID or SRA run accession 
+later). Add resourceIdentifier as the canonical identifier value, paired 
+with identifierScheme stating which scheme it belongs to (e.g. 
+"ncbi-genbank", "ncbi-refseq", "uniprot", "ena", "sra" — extend this enum 
+as future providers are added, do not hardcode it to GenBank-only values). 
+For this phase, identifierScheme will be "ncbi-genbank" or "ncbi-refseq" 
+depending on which Rule 1 selected. primaryAccession can remain as a 
+human-readable display field, but resourceIdentifier + identifierScheme 
+together are what future providers and any cross-provider lookup logic 
+should rely on programmatically.
+
+resourceCategory (NEW — added per review):
+Add resourceCategory with possible values: Genome, Gene, Transcript, 
+Protein, Assembly, Chromosome, Plasmid, Contig. This must explicitly 
+reflect which Rule (1/2/3) resolution path was taken — e.g. a Rule 3 
+gene-symbol query (like "TP53") should set resourceCategory: "Gene", not 
+"Genome". This field is what future Gene Explorer / Protein Explorer / 
+Transcript Explorer features will key off of, so it must be set accurately 
+and consistently, not inferred loosely. Document, per resourceCategory 
+value, which Rule(s) are expected to produce it.
+
+sequenceLengthUnit (NEW — added per review):
+sequenceLength must never be a bare number without a unit. Pair it with 
+sequenceLengthUnit, derived directly from resourceCategory: Protein → "aa" 
+(amino acids), all other categories (Genome, Gene, Transcript, Assembly, 
+Chromosome, Plasmid, Contig) → "bp" or "nt" as appropriate to what NCBI's 
+actual response specifies — check the real API response rather than 
+assuming bp vs nt are interchangeable labels. Do not set sequenceLength and 
+sequenceLengthUnit independently in code — derive the unit from the 
+category in one place so they cannot drift out of sync with each other.
+
+--------------------------------------------------
+
+STEP 2 — Downloads
+
+Reusable download model: name, format, url, verified, size (optional). 
+Supported formats this phase: Genome FASTA, GenBank Flat File, Feature 
+Table. Do NOT implement Protein FASTA, Gene FASTA, or CDS FASTA yet.
+
+--------------------------------------------------
+
+STEP 3 — Available Resources
+
+STEP 3 — Available Resources
+
+Do NOT fetch all biological records — return availability only.
+
+Example:
+
+availableResources {
+
+Genome,
+Genes,
+mRNA,
+CDS,
+Proteins
+
+}
+
+Each resource should contain:
+
+- available
+- estimatedCount (if obtainable)
+- expandable
+- provider
+
+The provider field identifies which database is responsible for serving
+that resource.
+
+Examples:
+
+Genome → GenBank (Phase 5.1)
+
+Genes → Future NCBI Gene module
+
+mRNA → Future Gene Explorer
+
+Proteins → Future UniProt integration
+
+Raw Reads → Future SRA integration
+
+Genome Assembly → Future RefSeq/Assembly provider
+
+The frontend will later use these fields to progressively expand deeper
+biological resources without changing the overall architecture.
+
+--------------------------------------------------
+
+STEP 4 — GenBank/RefSeq Provider
+
+Create a modular provider. Suggested structure:
+lib/genbank/search.ts, summary.ts, fetch.ts, parser.ts, index.ts
+
+- search.ts: find matching records (apply Rules 1-3 for resolution)
+- summary.ts: retrieve metadata
+- fetch.ts: retrieve sequence record
+- parser.ts: normalize into SequenceResource
+- index.ts: return ModuleResult<SequenceResource>
+
+Reuse existing retry logic.
+
+--------------------------------------------------
+
+STEP 5 — Metadata Extraction
+
+Extract whenever available: primary accession, secondary accession, 
+RefSeq accession, organism, scientific name, taxonomy, assembly, assembly 
+level, genome length WITH its unit (bp/nt/aa — see sequenceLengthUnit in 
+Step 1, do not extract a bare number), molecule type, topology, reference 
+status, definition, sequence version, submission date, last update. Do NOT 
+fabricate values.
+
+--------------------------------------------------
+
+STEP 6 — Downloads
+
+Generate verified download links for Genome FASTA, GenBank Flat File, 
+Feature Table. Verify URLs actually resolve. Do NOT assume URL patterns 
+without checking against real NCBI responses/documentation.
+
+--------------------------------------------------
+
+STEP 7 — Query Resolution
+
+Apply Rules 1-3 above to determine what the user searched (organism, gene, 
+accession, assembly, RefSeq) and resolve accordingly. Document, per query 
+tested in Step 10, which resolution path was taken and why.
+
+--------------------------------------------------
+
+STEP 8 — Frontend
+
+Reuse existing Dataset/Paper section style. Add a new "Sequence Foundation" 
+section displaying: organism, assembly, reference accession, genome size, 
+molecule type, topology, downloads, available resources. Do NOT redesign 
+the page.
+
+--------------------------------------------------
+
+STEP 9 — Error Handling
+
+Use ModuleResult. Differentiate: no sequence found, rate limited, network 
+error, parser error. Maintain consistency with PubMed and GEO error 
+patterns.
+
+--------------------------------------------------
+
+STEP 10 — Validation
+
+Validate with: Mycobacterium tuberculosis H37Rv, TP53, BRCA1, SARS-CoV-2, 
+Arabidopsis thaliana.
+
+For every query report: resolved query type, WHICH RULE (1/2/3) was 
+applied and why, primaryAccession, resourceIdentifier + identifierScheme, 
+resourceCategory (and confirm it matches what the applied Rule should 
+produce), sequenceLength + sequenceLengthUnit, whether it's RefSeq or 
+GenBank-only, organism, assembly, downloads available, reference status.
+
+Do NOT simply report "works." If any query produced a result that seems to 
+deviate from Rules 1-3, call that out explicitly rather than presenting it 
+as expected behavior.
+
+--------------------------------------------------
+
+STEP 11 — Regression Testing
+
+Verify: PubMed unchanged, GEO unchanged, pagination unchanged, no 
+TypeScript errors, no Python modifications, no AI modifications.
+
+--------------------------------------------------
+
+STEP 12 — Future Compatibility
+
+Document that Phase 5.2 will expand Genes → mRNA → CDS → Proteins using 
+the availableResources section. Later, ENA, SRA, UniProt, AlphaFold will 
+enrich the same SequenceResource object. Do NOT implement these phases yet.
+
+--------------------------------------------------
+
+STEP 13 — Final Report
+
+Report: files modified, architecture decisions, observed API schema 
+(specifically: how RefSeq vs GenBank was distinguishable, and how 
+reference/representative genome status was identifiable, per the Pre-Code 
+Inspection step), metadata extracted, downloads supported, validation 
+results (including which Rule applied per query), known limitations, 
+future expansion points.
+
+Confirm: no regressions, no frontend redesign, no Python changes, only the 
+Sequence Foundation was added, and Rules 1-3 were applied consistently 
+across all five validation queries.
