@@ -7,10 +7,10 @@ id = "artifacts/research-api"
 [[services]]
 name = "API Service"
 paths = ["/research-api"]
-localPort = 8082
+localPort = 8000
 
 [services.development]
 run = "bash /home/runner/workspace/artifacts/research-api/start.sh"
 
 [services.env]
-PORT = "8082"
+PORT = "8000"
