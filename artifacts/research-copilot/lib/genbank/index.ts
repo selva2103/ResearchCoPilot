@@ -93,7 +93,27 @@ async function resolveOrganism(
   // and the reference genome may be at a low position for well-studied organisms)
   const { ids: firstBatch, totalCount } = await searchAssemblies(organism, 200);
 
-  let allEntries = await fetchAssemblySummaries(firstBatch);
+  if (firstBatch.length === 0) {
+    return resolveOrganismViaNucCore(organism);
+  }
+
+  // Early exit for organisms with very many assemblies (e.g. SARS-CoV-2: 12,472).
+  // Such organisms are typically viral pathogens where every sequenced isolate is a
+  // separate GCA_ submission — none are flagged "reference/representative genome" in
+  // the assembly db. Their canonical reference lives in nuccore (e.g. NC_045512.2).
+  //
+  // Threshold: 5,000 is conservative — it catches SARS-CoV-2 (12,472) without
+  // excluding model organisms like Arabidopsis (378) or common bacteria (<3,000).
+  // We try nuccore FIRST; if it yields nothing we fall through to the assembly path.
+  if (totalCount > 5000) {
+    const nucCoreResult = await resolveOrganismViaNucCore(organism);
+    if (nucCoreResult.length > 0) return nucCoreResult;
+    // nuccore also returned nothing — fall through and try assembly path anyway
+  }
+
+  // Fetch assembly ESummaries in chunks of 50 (handled inside fetchAssemblySummaries)
+  // to avoid URL-length limits and 429 exposure.
+  let allEntries = await fetchAssemblySummaries(firstBatch.slice(0, 200));
   await sleep(RATE_DELAY_MS);
 
   // Check if we found a reference/representative genome in the first 200

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchPubMed } from "@/lib/pubmed";
 import { searchGeoDatasets } from "@/lib/geo";
+import { searchSequenceResources } from "@/lib/genbank";
 import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
+import type { SequenceResource } from "@/types/sequence-resource";
 
 // TODO: SRA integration         — NCBI SRA for raw sequencing runs linked to GSE accessions
 // TODO: ArrayExpress integration — EBI ArrayExpress for European transcriptomics datasets
@@ -88,6 +90,14 @@ interface AnalyzeResponse {
   datasetsMeta: PaginationMeta | null;
   /** Set when GEO fetch failed */
   datasetsError?: string;
+
+  /**
+   * Sequence resources for this query. Empty array on Load More requests —
+   * the sequence module runs on the initial load only (Phase 5.1, no pagination).
+   */
+  sequences: SequenceResource[];
+  /** Set when sequence fetch failed */
+  sequencesError?: string;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -201,10 +211,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // ── Run Sequence Foundation (initial load only) ───────────────────────────
+  // The sequence module does not support pagination — it runs once on the initial
+  // load and is not triggered on Load More requests (Phase 5.1 design).
+  // It runs sequentially after PubMed + GEO to share the NCBI rate-limit budget.
+  // The module is self-rate-limited (350 ms delays between NCBI calls).
+  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0;
+
+  let sequences: SequenceResource[] = [];
+  let sequencesError: string | undefined;
+
+  if (isInitialLoad) {
+    const seqResult = await searchSequenceResources(query);
+    sequences = seqResult.data;
+    sequencesError = seqResult.error?.message;
+  }
+
   // Mock data — will be replaced by OpenAI reasoning over papers + datasets.
   // Only included in the initial response (both offsets = 0) for efficiency.
   // On pagination requests, these are empty arrays — the frontend ignores them.
-  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0;
   const landscape = isInitialLoad
     ? ["Transcriptomics", "Biomarker Discovery", "Machine Learning"]
     : [];
@@ -227,8 +252,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     papersMeta,
     datasets,
     datasetsMeta,
+    sequences,
     ...(papersError && { papersError }),
     ...(datasetsError && { datasetsError }),
+    ...(sequencesError && { sequencesError }),
   };
 
   return NextResponse.json(result, { status: 200 });

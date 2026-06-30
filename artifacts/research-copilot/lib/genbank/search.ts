@@ -118,14 +118,37 @@ export interface NucCoreESummaryEntry {
 
 // ── Shared fetch helper ───────────────────────────────────────────────────────
 
-async function ncbiFetch(url: string): Promise<unknown> {
-  const res = await fetch(url, {
-    headers: { "User-Agent": "ResearchCoPilot/1.0 (research tool; contact: admin@example.com)" },
-  });
-  if (!res.ok) {
-    throw new Error(`NCBI HTTP ${res.status} for ${url}`);
+/**
+ * Fetch a NCBI Entrez URL and return the parsed JSON.
+ *
+ * Retries up to `maxRetries` times on HTTP 429 (rate limit) with a 2-second
+ * backoff. NCBI allows 3 req/s without an API key; 429 can occur during the
+ * initial page load when PubMed, GEO, and Sequence all run sequentially but
+ * close together. A 2-second backoff is enough to clear the rate window.
+ */
+async function ncbiFetch(url: string, maxRetries = 2): Promise<unknown> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      // Exponential-ish backoff: 2s, 4s
+      await sleep(2000 * attempt);
+    }
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "ResearchCoPilot/1.0 (research tool; contact: admin@example.com)",
+      },
+    });
+    if (res.status === 429) {
+      lastError = new Error(`NCBI HTTP 429 for ${url}`);
+      continue; // retry after backoff
+    }
+    if (!res.ok) {
+      throw new Error(`NCBI HTTP ${res.status} for ${url}`);
+    }
+    return res.json();
   }
-  return res.json();
+  throw lastError ?? new Error(`NCBI fetch failed after ${maxRetries} retries`);
 }
 
 // ── Gene ESearch ──────────────────────────────────────────────────────────────
@@ -254,18 +277,38 @@ export async function searchAssemblies(
 
 // ── Assembly ESummary batch ───────────────────────────────────────────────────
 
+/**
+ * Fetch assembly ESummary entries in batches of 50 to avoid URL-length limits
+ * and reduce 429 exposure when many IDs are requested in rapid succession.
+ *
+ * NCBI supports large ID lists in GET requests but batching keeps each request
+ * short and inserts the standard RATE_DELAY_MS pause between chunks.
+ */
 export async function fetchAssemblySummaries(
   ids: string[]
 ): Promise<AssemblyESummaryEntry[]> {
   if (ids.length === 0) return [];
-  const url =
-    `${NCBI_BASE}/esummary.fcgi?db=assembly` +
-    `&id=${ids.join(",")}&retmode=json`;
-  const data = (await ncbiFetch(url)) as {
-    result: { uids: string[] } & Record<string, AssemblyESummaryEntry>;
-  };
-  const uids = data.result.uids ?? [];
-  return uids.map((uid) => data.result[uid]).filter(Boolean);
+
+  const CHUNK_SIZE = 50;
+  const results: AssemblyESummaryEntry[] = [];
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+    const url =
+      `${NCBI_BASE}/esummary.fcgi?db=assembly` +
+      `&id=${chunk.join(",")}&retmode=json`;
+    const data = (await ncbiFetch(url)) as {
+      result: { uids: string[] } & Record<string, AssemblyESummaryEntry>;
+    };
+    const uids = data.result.uids ?? [];
+    results.push(...uids.map((uid) => data.result[uid]).filter(Boolean));
+    // Delay between chunks — skip after the last chunk
+    if (i + CHUNK_SIZE < ids.length) {
+      await sleep(RATE_DELAY_MS);
+    }
+  }
+
+  return results;
 }
 
 // ── NucCore ESummary ──────────────────────────────────────────────────────────
