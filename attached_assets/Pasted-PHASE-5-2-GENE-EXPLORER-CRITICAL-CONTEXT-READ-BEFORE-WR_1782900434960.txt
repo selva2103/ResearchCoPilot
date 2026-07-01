@@ -1,0 +1,328 @@
+PHASE 5.2 — GENE EXPLORER
+
+CRITICAL CONTEXT — READ BEFORE WRITING ANY CODE
+
+This phase expands the availableResources.Genes field from Phase 5.1 
+(Sequence Foundation) into a full Gene Explorer. It builds directly on 
+the existing architecture: QueryResolution (Phase 5.1.5) → Sequence 
+Foundation (Phase 5.1) → Gene Explorer (this phase).
+
+IMPORTANT API ARCHITECTURE NOTE — TWO SEPARATE CALL PATHS REQUIRED:
+The field list below comes from two different NCBI Gene API paths, not one:
+
+PATH A — Core gene fields (Official Symbol, Full Name, Gene ID, Organism, 
+Chromosome, Genomic Coordinates, Strand, Gene Type, Summary, Aliases):
+These come from NCBI Gene EFetch (db=gene, rettype=gene_table or ASN.1/XML)
+via the standard ESearch → EFetch pipeline.
+
+PATH B — Cross-database identifiers (HGNC ID, Ensembl ID, OMIM ID):
+These require additional calls or inspection beyond the core EFetch. They 
+may be available via NCBI ELink (db=gene, dbfrom=gene, linkname=gene_omim / 
+gene_ensembl / etc.), embedded in Dbtag fields within the EFetch response 
+itself, or present in ESummary — the actual source varies per identifier 
+type and is not consistent across all genes or organisms.
+
+DO NOT assume every external identifier is obtained through ELink alone. 
+During the mandatory pre-code inspection (below), determine whether each 
+identifier (HGNC, Ensembl, OMIM, GeneRIF count) is available via EFetch, 
+ESummary, ELink, or another documented NCBI Gene response field, and use 
+the most appropriate documented source for each. The architecture must still 
+keep cross-database enrichment logically separated from the core gene fetch 
+(Path A vs Path B separation), but Path B's internal implementation should 
+use whatever real API mechanism the inspection reveals, not an assumed 
+ELink-only approach.
+
+Additional constraints regardless of source:
+- These fields are NOT guaranteed for every gene or organism (HGNC is 
+  human-specific, Ensembl coverage varies by species, not every gene has 
+  an OMIM entry).
+- Do NOT skip null results silently — set fields to null/undefined 
+  explicitly so the frontend renders "not available" cleanly rather than 
+  leaving the field missing or broken.
+
+Before writing the parser, inspect real NCBI Gene API responses for at 
+least TP53, BRCA1, EGFR, and one non-human gene (e.g. Arabidopsis thaliana 
+WRKY33 or mouse Trp53) to confirm the actual field names and structure 
+returned by both Path A and Path B, and build the parser against the real 
+observed schema — not assumed field names.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, Retry Logic, 
+ModuleResult, Universal Exploration Framework, PubMed module, GEO module, 
+Sequence Foundation (Phase 5.1), Biological Query Resolver (Phase 5.1.5), 
+AI-generated sections, existing frontend layout.
+
+Do NOT build: Protein sequences, mRNA FASTA, CDS FASTA, ENA, SRA, 
+UniProt, AlphaFold, variant annotation, pathway analysis — these belong 
+in later phases (5.3+) and are explicitly out of scope here.
+
+Reuse: QueryResolution (Phase 5.1.5), ModuleResult<T>, Universal 
+Exploration Framework, Load More, Pagination, Retry logic.
+
+--------------------------------------------------
+
+GOAL
+
+Answer the question "Tell me about this gene" — not "download this gene."
+
+Expand availableResources.Genes from a flag ("Genes: available") into 
+actual structured gene metadata. The user should be able to search TP53 
+and see a real gene card with all available identifiers, coordinates, and 
+expandable links to future phases.
+
+--------------------------------------------------
+
+STEP 1 — GeneRecord Interface
+
+Create a strongly typed GeneRecord interface. Fields:
+
+Core fields (from Path A — EFetch, available for most organisms):
+- geneId (NCBI Gene ID)
+- officialSymbol
+- fullName
+- organism
+- taxonomyId
+- chromosome
+- cytogeneticLocation (optional — available for human/mouse/rat, 
+  not all organisms)
+- genomicStart (integer coordinate)
+- genomicEnd (integer coordinate)
+- strand ("+" | "-" | null)
+- geneType (e.g. "protein-coding", "ncRNA", "pseudogene", etc.)
+- summary (gene description text — may be absent for some genes, 
+  set null not empty string when absent)
+- aliases (string array — "Other Aliases" field from NCBI Gene)
+- sourceDatabase ("ncbi-gene")
+
+Cross-database fields (from Path B — ELink, organism/gene-specific):
+- hgncId (string | null — human only)
+- ensemblId (string | null — where available)
+- omimId (string | null — where OMIM entry exists)
+- geneRifCount (integer | null — if retrievable without a separate heavy call)
+
+Links:
+- ncbiGeneUrl (constructed from geneId — document the URL pattern used)
+- ensemblUrl (constructed from ensemblId where available)
+
+Expandable resources (availability flags only — do NOT fetch these):
+- transcripts: { available: boolean, estimatedCount: number | null }
+- proteins: { available: boolean, estimatedCount: number | null }
+- variants: { available: boolean }  — future phase
+- expression: { available: boolean } — future phase
+- pathways: { available: boolean } — future phase
+
+Document every field. Mark optional fields as optional in TypeScript.
+
+--------------------------------------------------
+
+STEP 2 — Gene Module File Structure
+
+Suggested structure mirroring existing modules:
+lib/gene/search.ts — ESearch against db=gene
+lib/gene/fetch.ts — EFetch (Path A) for core fields
+lib/gene/links.ts — ELink (Path B) for cross-database identifiers
+lib/gene/parser.ts — normalize into GeneRecord
+lib/gene/index.ts — orchestrate and return ModuleResult<GeneRecord>
+
+Keep Path A and Path B as separate functions — do not merge them into one 
+monolithic fetch. This makes Path B fields independently skippable if an 
+ELink call fails (partial result) without breaking the core gene data.
+
+--------------------------------------------------
+
+STEP 3 — Query Integration with Phase 5.1.5 Resolver
+
+The Gene Explorer should consume QueryResolution from Phase 5.1.5 when 
+available. Specifically:
+- If queryType === "Gene" AND confidence is HIGH (≥ 0.90): use the 
+  resolver's primaryIdentifier (NCBI Gene ID) to go directly to EFetch, 
+  skipping ESearch entirely.
+- If queryType === "Gene" AND confidence is MEDIUM (0.60–0.89): perform 
+  ESearch using the normalizedQuery, but surface the resolver's 
+  interpretation alongside the results for the user to confirm.
+- All other cases: ESearch using originalQuery, backward-compatible with 
+  pre-resolver behavior.
+
+Do NOT break the module if QueryResolution is unavailable — fall back to 
+ESearch on originalQuery.
+
+--------------------------------------------------
+
+STEP 4 — Multi-Result Handling
+
+A gene symbol search (e.g. "TP53") can return multiple NCBI Gene records 
+across different organisms (Homo sapiens TP53, Mus musculus Trp53, 
+Rattus norvegicus Tp53, etc.). Handle this as follows:
+
+- If the resolver has identified a specific organism (via taxonomyId or 
+  organism field in QueryResolution), prefer that organism's record first.
+- If no organism context exists, return ALL matching records as a list 
+  (ModuleResult.data array), ordered by NCBI's default relevance, and let 
+  the user select — do not silently pick one.
+- Display all results in the Gene Explorer section with organism clearly 
+  labeled per record, so the user can see "TP53 [Homo sapiens]" vs 
+  "Trp53 [Mus musculus]" distinctly.
+- Apply the Universal Exploration Framework (Load More, pagination) if 
+  totalCount exceeds the page size — a search like "kinase" against 
+  db=gene will return far more than 10 results.
+
+--------------------------------------------------
+
+STEP 5 — Rate Limit Awareness
+
+Gene Explorer requires potentially three separate NCBI Entrez calls per 
+resolved gene (ESearch + EFetch + ELink), all drawing from the same shared 
+ncbi_entrez_limiter pool as PubMed and GEO. When displaying multiple gene 
+records from a multi-result search (Step 4), ELink calls for cross-database 
+identifiers should be fetched lazily (on expand/select) rather than 
+eagerly for every record in the list — otherwise a 10-result gene list 
+fires up to 30 Entrez calls at once on page load, which will reliably hit 
+the rate limit. Document where lazy vs eager fetching is applied.
+
+Gene Identifier Cache (in-session, in-memory):
+Cache resolved Gene IDs in memory for the lifetime of the current search 
+session. If multiple downstream operations require the same Gene ID during 
+one search (e.g. the resolver, the gene fetch, and a future transcript 
+lookup all referring to TP53 Gene ID 7157), reuse the resolved identifier 
+instead of repeating ESearch. This in-session cache must NOT touch the 
+existing Redis cache architecture or any persistent infrastructure — it is 
+a lightweight in-memory Map local to the current request/session only.
+
+--------------------------------------------------
+
+STEP 6 — Partial Results and Error Handling
+
+Because Path A (core fields) and Path B (cross-database IDs) are separate 
+calls, treat them as independently failable:
+- If Path A fails → ModuleResult status: "error", no record shown.
+- If Path A succeeds but Path B (ELink) fails for some identifiers → 
+  ModuleResult status: "partial", core gene data shown, cross-database 
+  fields set to null with a note that enrichment failed.
+Never silently discard a partial result — surface it via the ModuleResult 
+status field.
+
+--------------------------------------------------
+
+STEP 7 — Frontend: Gene Explorer Card
+
+Add a "Gene Explorer" section to the results page. Reuse existing card 
+style — do NOT redesign the application. Display per gene record:
+
+Core card:
+- Official Symbol (prominent)
+- Full Name
+- Organism
+- Gene Type
+- Chromosome + Cytogenetic Location (if available)
+- Genomic Coordinates + Strand
+- Gene ID with link to NCBI Gene page
+
+Cross-database IDs section (show "not available" cleanly for null fields, 
+not empty/broken UI):
+- HGNC ID (if available)
+- Ensembl ID with link (if available)
+- OMIM ID with link (if available)
+
+Gene Summary section:
+- Full summary text (collapsible if long)
+- If no NCBI Gene Summary exists for this gene, display the text 
+  "No curated summary available for this gene." — do not leave the 
+  section empty, collapse the card unexpectedly, or omit the section 
+  entirely. The card must remain fully visible regardless of whether 
+  a summary exists.
+- Aliases as chips
+
+Expandable Resources section:
+- Transcripts: "X available" or "Available" — expandable stub for Phase 5.3
+- Proteins: "X available" or "Available" — expandable stub for Phase 5.4
+- Variants, Expression, Pathways: "Future" badge — not clickable yet
+
+--------------------------------------------------
+
+STEP 8 — Error States in UI
+
+Distinguish in the UI:
+- No gene found for this query
+- Gene found but cross-database enrichment partially failed (show core 
+  data, indicate which fields are unavailable)
+- Full failure (ModuleResult: error)
+- Rate limited
+
+Do not show empty/broken field boxes — use explicit "not available" text.
+
+--------------------------------------------------
+
+STEP 9 — Validation
+
+Test with: TP53, BRCA1, EGFR, CFTR, kinase, SARS-CoV-2 (non-gene 
+query — confirm it does NOT erroneously route to Gene Explorer if 
+resolver correctly identifies it as Genome/Assembly), and one non-human 
+gene (e.g. Arabidopsis WRKY33 or Mus musculus Trp53).
+
+For every query report:
+- Whether QueryResolution was used and at what confidence tier
+- Which resolution path was taken (direct EFetch via Gene ID vs ESearch)
+- NCBI Gene ID
+- officialSymbol, fullName, organism
+- chromosome, cytogeneticLocation (or "not available")
+- genomicStart, genomicEnd, strand
+- geneType
+- hgncId, ensemblId, omimId (or "not available" explicitly — do not skip 
+  null fields in the report)
+- Which fields came from Path A vs Path B
+- ModuleResult status (success / partial / error — with reason if not 
+  success)
+- Whether multi-organism results were returned for gene-symbol queries, 
+  and how they were presented
+
+Do not report "works." Show actual field values per query.
+
+--------------------------------------------------
+
+STEP 10 — Regression Testing
+
+Test with actual evidence, not a blanket claim:
+- PubMed: run "TP53" and "breast cancer", show paper counts match pre-5.2 
+  behavior
+- GEO: run "TP53" and "breast cancer", show dataset counts match pre-5.2 
+  behavior
+- Sequence Foundation: run "SARS-CoV-2" and "Mycobacterium tuberculosis", 
+  show accession and reference status match Phase 5.1 output
+- Pagination: confirm Load More works for both PubMed and GEO after Phase 
+  5.2 is added
+- No TypeScript errors
+- No Python modifications
+- No AI modifications
+
+--------------------------------------------------
+
+STEP 11 — Future Compatibility
+
+Document that Phase 5.3 (Transcript Explorer) will expand 
+GeneRecord.transcripts from an availability flag into actual TranscriptRecord 
+objects. Phase 5.4 (Protein Explorer) will similarly expand 
+GeneRecord.proteins. No future phase should change the GeneRecord interface's 
+core fields — only add fields or expand the stub objects into full records.
+
+--------------------------------------------------
+
+STEP 12 — Final Report
+
+Report:
+- Files modified
+- Architecture decisions
+- Real NCBI Gene API response structure observed during pre-code inspection 
+  for TP53 and BRCA1 (show actual field names returned, not assumed ones)
+- Which fields came from Path A (EFetch) vs Path B (ELink)
+- Which fields were null/unavailable for which test queries, and why
+- Lazy vs eager fetching decision for ELink calls (Step 5)
+- Validation results per Step 9 (all queries, all fields, no blanket "works")
+- Regression results per Step 10 (with evidence)
+- Known limitations
+- Future expansion points for Phases 5.3 and 5.4
+
+Confirm: no regressions, no frontend redesign, no Python changes, no AI 
+changes, only the Gene Explorer was added.

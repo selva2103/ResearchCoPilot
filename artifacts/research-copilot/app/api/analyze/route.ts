@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchPubMed } from "@/lib/pubmed";
 import { searchGeoDatasets } from "@/lib/geo";
 import { searchSequenceResources } from "@/lib/genbank";
+import { searchGeneExplorer } from "@/lib/gene";
 import { resolveQuery } from "@/lib/resolver";
 import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
 import type { SequenceResource } from "@/types/sequence-resource";
+import type { GeneRecord } from "@/types/gene-record";
 import type { QueryResolution } from "@/types/query-resolution";
 
 // TODO: SRA integration         — NCBI SRA for raw sequencing runs linked to GSE accessions
@@ -67,6 +69,11 @@ interface AnalyzeRequest {
    */
   datasetsOffset?: number;
   /**
+   * Zero-based offset for Gene Explorer results.
+   * Default: 0. When > 0 and both other offsets = 0: only Gene Explorer is fetched.
+   */
+  genesOffset?: number;
+  /**
    * The effective (normalized) query that was used for the initial load.
    * Passed by the frontend on Load More requests so the server uses the same
    * query that produced page 1 — avoids re-running the biological resolver on
@@ -115,6 +122,16 @@ interface AnalyzeResponse {
   sequencesError?: string;
 
   /**
+   * Gene records for this page. Empty array on non-gene Load More requests.
+   * Gene Explorer runs on the initial load and on gene pagination (genesOffset > 0).
+   */
+  genes: GeneRecord[];
+  /** Pagination metadata for genes. null when Gene Explorer was not fetched. */
+  genesMeta: PaginationMeta | null;
+  /** Set when Gene Explorer fetch failed */
+  genesError?: string;
+
+  /**
    * Structured result of the Biological Query Resolution Layer (Phase 5.1.5).
    * Populated on the initial load only — null on Load More requests.
    *
@@ -159,30 +176,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     typeof body.datasetsOffset === "number" && body.datasetsOffset >= 0
       ? body.datasetsOffset
       : 0;
+  const genesOffset =
+    typeof body.genesOffset === "number" && body.genesOffset >= 0
+      ? body.genesOffset
+      : 0;
 
   // ── Smart module selection ────────────────────────────────────────────────
-  // On the initial load (both offsets = 0) we run both modules sequentially to respect
-  // the shared 3 req/s NCBI rate limit (concurrent: 5 calls at once → HTTP 429).
+  // On the initial load (all offsets = 0) we run all modules sequentially to respect
+  // the shared 3 req/s NCBI rate limit (concurrent calls → HTTP 429).
   //
   // On pagination:
-  //   Load More Papers (papersOffset > 0, datasetsOffset = 0) → run only PubMed
-  //   Load More Datasets (datasetsOffset > 0, papersOffset = 0) → run only GEO
-  //   Both > 0 (not yet used by frontend, but supported) → run both sequentially
+  //   Load More Papers   (papersOffset > 0, others = 0) → run only PubMed
+  //   Load More Datasets (datasetsOffset > 0, others = 0) → run only GEO
+  //   Load More Genes    (genesOffset > 0, others = 0) → run only Gene Explorer
+  //   Multiple > 0 (not yet used by frontend, but supported) → run relevant modules
   //
-  // This saves NCBI API calls and keeps us within rate limits on every pagination click.
-  //
-  // PubMed costs 3 upstream calls per page (ESearch, ESummary, EFetch).
-  // GEO costs 2 upstream calls per page (ESearch, ESummary).
-  // Never run both modules concurrently — sequential execution is intentional.
+  // Never run modules concurrently — sequential execution respects NCBI rate limits.
 
-  const runPubMed = papersOffset > 0 || datasetsOffset === 0;
-  const runGeo = datasetsOffset > 0 || papersOffset === 0;
+  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0 && genesOffset === 0;
+  const onlyPapers = papersOffset > 0 && datasetsOffset === 0 && genesOffset === 0;
+  const onlyDatasets = datasetsOffset > 0 && papersOffset === 0 && genesOffset === 0;
+  const onlyGenes = genesOffset > 0 && papersOffset === 0 && datasetsOffset === 0;
 
-  // Both offsets 0 → run both (initial load). papersOffset > 0 only → PubMed only.
-  // datasetsOffset > 0 only → GEO only. Both > 0 → both.
-  const onlyPapers = papersOffset > 0 && datasetsOffset === 0;
-  const onlyDatasets = datasetsOffset > 0 && papersOffset === 0;
-  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0;
+  const runPubMed = !onlyDatasets && !onlyGenes;
+  const runGeo = !onlyPapers && !onlyGenes;
+  const runGenes = isInitialLoad || onlyGenes;
 
   // ── Biological Query Resolution (Step 5 — initial load only) ─────────────
   // Runs before any scientific module to determine the canonical biological
@@ -298,6 +316,48 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     sequencesError = seqResult.error?.message;
   }
 
+  // ── Run Gene Explorer (initial load + gene pagination) ────────────────────
+  // Gene Explorer runs on the initial load and on gene-specific Load More requests
+  // (genesOffset > 0). It is skipped on PubMed-only or GEO-only pagination.
+  //
+  // The gene module is self-rate-limited (350 ms delays between NCBI calls).
+  // It runs sequentially after Sequence Foundation to share the NCBI rate-limit budget.
+  //
+  // Gating: the gene module gates itself when the resolver identifies a non-gene
+  // entity type at HIGH confidence (Organism, Disease, Accession, etc.).
+  // The resolver result (resolution) is passed so the gene module can make that call.
+  let genes: GeneRecord[] = [];
+  let genesMeta: PaginationMeta | null = null;
+  let genesError: string | undefined;
+
+  if (runGenes) {
+    const geneResult = await searchGeneExplorer(effectiveQuery, {
+      limit,
+      offset: genesOffset,
+      resolution,
+    });
+
+    genes = geneResult.data;
+    genesError = geneResult.error?.message;
+
+    if (
+      geneResult.hasMore !== undefined ||
+      geneResult.hitUpstreamLimit !== undefined ||
+      geneResult.totalCount !== undefined
+    ) {
+      genesMeta = {
+        totalCount: geneResult.totalCount ?? 0,
+        pageSize: geneResult.pageSize ?? limit,
+        offset: geneResult.offset ?? genesOffset,
+        hasMore: geneResult.hasMore ?? false,
+        nextOffset: geneResult.nextOffset ?? null,
+        currentPage: geneResult.currentPage ?? 1,
+        totalPages: geneResult.totalPages ?? 0,
+        hitUpstreamLimit: geneResult.hitUpstreamLimit ?? false,
+      };
+    }
+  }
+
   // Mock data — will be replaced by OpenAI reasoning over papers + datasets.
   // Only included in the initial response (both offsets = 0) for efficiency.
   // On pagination requests, these are empty arrays — the frontend ignores them.
@@ -324,11 +384,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     datasets,
     datasetsMeta,
     sequences,
+    genes,
+    genesMeta,
     resolution,
     effectiveQuery,
     ...(papersError && { papersError }),
     ...(datasetsError && { datasetsError }),
     ...(sequencesError && { sequencesError }),
+    ...(genesError && { genesError }),
   };
 
   return NextResponse.json(result, { status: 200 });

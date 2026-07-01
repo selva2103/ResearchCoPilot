@@ -1,4 +1,5 @@
 {
   "/api/analyze/route": "app/api/analyze/route.js",
-  "/api/resolve-validate/route": "app/api/resolve-validate/route.js"
+  "/page": "app/page.js",
+  "/results/page": "app/results/page.js"
 }
