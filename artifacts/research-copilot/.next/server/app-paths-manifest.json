@@ -1,3 +1,4 @@
 {
-  "/page": "app/page.js"
+  "/api/analyze/route": "app/api/analyze/route.js",
+  "/api/resolve-validate/route": "app/api/resolve-validate/route.js"
 }

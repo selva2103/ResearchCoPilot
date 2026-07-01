@@ -19,6 +19,14 @@
  *   relationships.organisms / relationships.genes, but MUST NOT change queryType.
  *   E.g. "TB" resolves type="Disease", not "Organism", even after synonymExpansion
  *   reveals Mycobacterium tuberculosis as the causative organism.
+ *
+ * synonymPreferredType (Bug fix — Phase 5.1.5 validation):
+ *   Some disease abbreviations (e.g. "COVID" → "COVID-19") expand to terms that
+ *   NCBI Taxonomy will match as a virus organism BEFORE MedGen sees them, violating
+ *   the type-independence rule. SYNONYM_TYPE_HINTS maps these keys to their intended
+ *   QueryType so the resolver pipeline can skip the Organism step for disease synonyms.
+ *   This is a routing hint only — it does NOT force the final queryType; if the
+ *   disease step also returns null, the resolver falls through to Unknown normally.
  */
 
 // ─── Hardcoded synonym fallback table ─────────────────────────────────────────
@@ -78,6 +86,64 @@ const HARDCODED_SYNONYMS: Readonly<Record<string, string>> = {
   RAT:       "Rattus norvegicus",
 };
 
+// ─── Synonym type hints ────────────────────────────────────────────────────────
+// Maps HARDCODED_SYNONYMS keys to their intended biological type.
+//
+// Purpose (Bug fix — Phase 5.1.5 validation):
+//   Some disease abbreviations expand to terms that NCBI Taxonomy will match as a
+//   virus/organism BEFORE MedGen gets a chance to classify them as Disease.
+//   Example: "COVID" → "COVID-19" → NCBI Taxonomy returns SARS-CoV-2 (Organism),
+//   but the user's intent is the disease COVID-19. This violates the
+//   type-independence rule which states synonym expansion must not change queryType.
+//
+//   SYNONYM_TYPE_HINTS tells the resolver pipeline to SKIP the Organism step for
+//   keys that are known disease abbreviations. If the Disease step also fails,
+//   the resolver falls through to Unknown as normal.
+//
+// Keys: same uppercase keys as HARDCODED_SYNONYMS.
+// Values: "Disease" | "Organism" (only Disease/Organism hints are needed;
+//         gene synonyms are not in HARDCODED_SYNONYMS).
+//
+// ⚠ REQUIRES MAINTENANCE alongside HARDCODED_SYNONYMS.
+
+const SYNONYM_TYPE_HINTS: Readonly<Record<string, "Disease" | "Organism">> = {
+  // Disease abbreviations
+  TB:       "Disease",
+  MTB:      "Disease",
+  COVID:    "Disease",
+  COVID19:  "Disease",
+  FLU:      "Disease",
+  AML:      "Disease",
+  CML:      "Disease",
+  ALL:      "Disease",
+  CLL:      "Disease",
+  NSCLC:    "Disease",
+  SCLC:     "Disease",
+  CF:       "Disease",
+  COPD:     "Disease",
+  MS:       "Disease",
+  RA:       "Disease",
+  SLE:      "Disease",
+  T1D:      "Disease",
+  T2D:      "Disease",
+  AD:       "Disease",
+  PD:       "Disease",
+  ALS:      "Disease",
+  HD:       "Disease",
+  MD:       "Disease",
+  DMD:      "Disease",
+  DS:       "Disease",
+  // Organism abbreviations
+  "E. COLI": "Organism",
+  ECOLI:     "Organism",
+  YEAST:     "Organism",
+  ZEBRAFISH: "Organism",
+  FRUITFLY:  "Organism",
+  NEMATODE:  "Organism",
+  MOUSE:     "Organism",
+  RAT:       "Organism",
+};
+
 // ─── Disease → causative organism associations (hardcoded, Phase 5.1.5) ────────
 // Used to populate relationships.organisms for disease queries.
 // Only covers diseases with a single well-defined causative organism.
@@ -122,6 +188,14 @@ export interface SynonymResult {
   synonyms: string[];
   /** True if normalization actually changed the query string. */
   expanded: boolean;
+  /**
+   * Type hint derived from SYNONYM_TYPE_HINTS.
+   * When expanded=true and synonymPreferredType="Disease", the resolver pipeline
+   * skips the Organism step to prevent disease abbreviations (e.g. "COVID" → "COVID-19")
+   * from being misclassified as Organism by NCBI Taxonomy.
+   * Undefined when no hint is registered or expanded=false.
+   */
+  synonymPreferredType?: "Disease" | "Organism";
 }
 
 /**
@@ -145,6 +219,7 @@ export function normalizeSynonyms(query: string): SynonymResult {
       synonymSource: "hardcoded",
       synonyms: [canonical],
       expanded: true,
+      synonymPreferredType: SYNONYM_TYPE_HINTS[key],
     };
   }
 

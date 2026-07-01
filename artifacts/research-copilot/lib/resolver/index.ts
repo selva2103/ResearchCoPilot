@@ -85,8 +85,13 @@ async function _resolveQuery(query: string): Promise<QueryResolution> {
   // ── Step 0: Synonym normalization (Step 10) ───────────────────────────────
   // Apply the hardcoded synonym table first. API-based synonym data from MeSH,
   // MedGen, and NCBI Taxonomy is collected within the individual resolvers.
-  const { normalizedQuery: normalized, synonymSource, synonyms, expanded } =
-    normalizeSynonyms(query);
+  const {
+    normalizedQuery: normalized,
+    synonymSource,
+    synonyms,
+    expanded,
+    synonymPreferredType,
+  } = normalizeSynonyms(query);
 
   // The effective query for API lookups (post-synonym-expansion)
   const q = normalized;
@@ -126,7 +131,13 @@ async function _resolveQuery(query: string): Promise<QueryResolution> {
   }
 
   // ── Step 3: Organism (NCBI Taxonomy ESearch) ──────────────────────────────
-  const organismResult = await resolveOrganism(q);
+  // Skip if the synonym expansion identified this as a Disease abbreviation.
+  // Rationale: disease abbreviations like "COVID" expand to "COVID-19" which NCBI
+  // Taxonomy matches as SARS-CoV-2 (a virus organism). Skipping the organism step
+  // enforces the type-independence rule — the synonym's intended type governs routing.
+  // If the disease step (Step 4) also fails, the resolver falls through to Unknown.
+  const skipOrganism = expanded && synonymPreferredType === "Disease";
+  const organismResult = skipOrganism ? null : await resolveOrganism(q);
   if (organismResult && organismResult.confidence >= 0.60) {
     const mergedSynonyms = expanded
       ? [...(organismResult.synonyms ?? []), ...synonyms]

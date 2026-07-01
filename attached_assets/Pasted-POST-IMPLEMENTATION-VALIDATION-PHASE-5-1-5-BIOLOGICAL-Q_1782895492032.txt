@@ -1,0 +1,294 @@
+POST-IMPLEMENTATION VALIDATION — PHASE 5.1.5 (BIOLOGICAL QUERY RESOLUTION)
+
+Do NOT implement new features.
+
+Do NOT modify architecture.
+
+Do NOT refactor code.
+
+Do NOT optimize anything unless a real bug is discovered during validation.
+
+The purpose of this task is ONLY to verify that the Biological Query Resolution Layer works correctly for real-world biological queries and is not overfitted to the example queries used during development.
+
+--------------------------------------------------
+
+STEP 1 — AUTOMATED VALIDATION SUITE
+
+Run the resolver against the following queries.
+
+==========================
+DISEASES
+==========================
+
+Parkinson disease
+Cystic fibrosis
+Huntington disease
+Crohn disease
+Asthma
+Influenza
+Dengue fever
+Malaria
+Type 2 diabetes
+Psoriasis
+
+==========================
+GENES
+==========================
+
+APOE
+KRAS
+MYC
+PTEN
+CFTR
+HBB
+VEGFA
+BRAF
+AKT1
+IL6
+
+==========================
+ORGANISMS
+==========================
+
+Escherichia coli
+Saccharomyces cerevisiae
+Drosophila melanogaster
+Danio rerio
+Mus musculus
+Caenorhabditis elegans
+Bacillus subtilis
+
+==========================
+VIRUSES
+==========================
+
+Influenza A virus
+HIV-1
+Zika virus
+Ebola virus
+Dengue virus
+
+==========================
+ACCESSIONS
+==========================
+
+NC_000001
+NM_001126112
+NP_001119584
+NG_012232
+GCF_009858895
+
+==========================
+AMBIGUOUS TERMS
+==========================
+
+ACTB
+GAPDH
+COX1
+MAPK
+ABC1
+
+These should NOT silently resolve incorrectly. If ambiguity exists, report it.
+
+==========================
+SYNONYMS
+==========================
+
+TB
+COVID
+AML
+
+Verify synonym normalization behaves correctly.
+
+==========================
+UNKNOWN TERMS
+==========================
+
+abcdefxyz
+proteinxyz123
+qwertybiology
+
+These should resolve as Unknown with LOW confidence.
+
+==========================
+MIXED QUERIES
+==========================
+
+Human TP53
+Mouse BRCA1
+SARS spike protein
+Breast cancer TP53
+Tuberculosis H37Rv
+EGFR lung cancer
+CRISPR Cas9
+microRNA-21
+
+--------------------------------------------------
+
+STEP 2 — VERIFY EACH QUERY
+
+For EVERY query report:
+
+- original query
+- detected query type
+- normalized query
+- confidence score
+- confidence tier
+- matched provider
+- identifier (if any)
+- effectiveQuery
+- resolution path used
+- ambiguity detected (yes/no)
+- candidate matches (if applicable)
+
+--------------------------------------------------
+
+STEP 3 — VERIFY GATING
+
+For every query confirm:
+
+HIGH confidence
+→ downstream modules receive normalizedQuery
+
+MEDIUM confidence
+→ downstream modules receive originalQuery
+→ suggestion shown
+
+LOW confidence
+→ downstream modules receive originalQuery
+→ Unknown state shown
+
+Report any query that violates these rules.
+
+--------------------------------------------------
+
+STEP 4 — VERIFY SYNONYMS
+
+Confirm:
+
+TB → Tuberculosis
+
+COVID → COVID-19
+
+AML → Acute Myeloid Leukemia
+
+If any synonym fails,
+report exactly why.
+
+--------------------------------------------------
+
+STEP 5 — VERIFY UNKNOWN HANDLING
+
+Unknown queries must:
+
+NOT become Gene
+
+NOT become Disease
+
+NOT become Organism
+
+Return LOW confidence.
+
+--------------------------------------------------
+
+STEP 6 — VERIFY AMBIGUITY
+
+Confirm ambiguous queries produce either:
+
+candidateMatches
+
+or
+
+MEDIUM confidence
+
+They must NEVER silently choose one entity if multiple equally valid matches exist.
+
+--------------------------------------------------
+
+STEP 7 — REGRESSION TEST
+
+Verify:
+
+PubMed still works.
+
+GEO still works.
+
+Sequence Foundation still works.
+
+Pagination still works.
+
+No TypeScript errors.
+
+No broken imports.
+
+No Python changes.
+
+--------------------------------------------------
+
+--------------------------------------------------
+
+STEP 8 — BUG DISCOVERY AND IMMEDIATE FIX LOOP
+
+This validation is NOT only for discovering bugs.
+
+Its purpose is to leave the Biological Query Resolution Layer in a stable,
+production-ready state.
+
+If ANY bug is discovered during validation:
+
+1. Stop and identify the exact root cause.
+
+2. Fix the bug immediately using the smallest possible code change.
+   Do NOT refactor unrelated code.
+   Do NOT redesign the architecture.
+
+3. Re-run ALL validation tests that could be affected by the fix,
+   not only the failing query.
+
+4. Confirm the original bug is resolved.
+
+5. Verify that no regression has been introduced.
+
+6. Continue the remaining validation from where it stopped.
+
+If another bug is discovered later in the validation,
+repeat this same Fix → Re-test → Continue cycle.
+
+Do NOT postpone fixes until the end.
+
+Do NOT leave known bugs unresolved.
+
+Continue this iterative validation process until:
+
+- all discovered bugs are fixed,
+- all affected tests pass,
+- and only genuine external limitations (for example NCBI rate limiting
+  or missing upstream metadata) remain.
+
+Only then produce the Final Report.
+
+--------------------------------------------------
+--------------------------------------------------
+
+STEP 9 — FINAL REPORT
+
+Provide:
+
+- Total queries tested
+- Queries passed
+- Queries failed
+- Bugs discovered
+- Bugs fixed
+- Remaining limitations
+- Confidence that the Biological Query Resolution Layer generalizes beyond the original example queries.
+
+Do NOT simply report "everything works."
+
+The validation is considered complete only after every discovered bug has
+either:
+
+- been fixed and successfully re-tested, or
+- been proven to be caused by an upstream external limitation
+  (for example NCBI rate limiting or missing source data), with evidence.
+
+Support every conclusion with actual validation results.
