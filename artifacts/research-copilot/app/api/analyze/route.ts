@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchPubMed } from "@/lib/pubmed";
 import { searchGeoDatasets } from "@/lib/geo";
 import { searchSequenceResources } from "@/lib/genbank";
+import { resolveQuery } from "@/lib/resolver";
 import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
 import type { SequenceResource } from "@/types/sequence-resource";
+import type { QueryResolution } from "@/types/query-resolution";
 
 // TODO: SRA integration         — NCBI SRA for raw sequencing runs linked to GSE accessions
 // TODO: ArrayExpress integration — EBI ArrayExpress for European transcriptomics datasets
@@ -64,6 +66,19 @@ interface AnalyzeRequest {
    * Default: 0. When > 0 and papersOffset = 0: only GEO is fetched (saves NCBI calls).
    */
   datasetsOffset?: number;
+  /**
+   * The effective (normalized) query that was used for the initial load.
+   * Passed by the frontend on Load More requests so the server uses the same
+   * query that produced page 1 — avoids re-running the biological resolver on
+   * every pagination click.
+   *
+   * - Populated by the frontend when the initial load returned a HIGH-confidence
+   *   resolution with a different normalizedQuery.
+   * - Absent on the initial load (server computes effectiveQuery itself).
+   * - Absent when the initial resolution was MEDIUM/LOW (normalizedQuery was not
+   *   auto-applied, so originalQuery is still the effective query).
+   */
+  resolvedQuery?: string;
 }
 
 interface AnalyzeResponse {
@@ -98,6 +113,30 @@ interface AnalyzeResponse {
   sequences: SequenceResource[];
   /** Set when sequence fetch failed */
   sequencesError?: string;
+
+  /**
+   * Structured result of the Biological Query Resolution Layer (Phase 5.1.5).
+   * Populated on the initial load only — null on Load More requests.
+   *
+   * Confidence-tier gating (Step 5):
+   *   HIGH   (≥ 0.90) — effectiveQuery was auto-set to normalizedQuery; downstream
+   *                      modules received the normalized query on this request.
+   *   MEDIUM (0.60–0.89) — suggestion shown to user; originalQuery was used for modules.
+   *   LOW    (< 0.60)    — Unknown; originalQuery was used unchanged.
+   */
+  resolution: QueryResolution | null;
+
+  /**
+   * The query string that was actually passed to PubMed, GEO, and Sequence Foundation.
+   * Equals normalizedQuery when resolution.confidenceTier is "high" and normalizedQuery
+   * differs from originalQuery; equals originalQuery otherwise.
+   *
+   * The frontend must pass this back as resolvedQuery on every Load More request so that
+   * pagination fetches pages 2+ using the same query that was used for page 1.
+   *
+   * Included on all responses (initial and Load More).
+   */
+  effectiveQuery: string;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -143,6 +182,40 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // datasetsOffset > 0 only → GEO only. Both > 0 → both.
   const onlyPapers = papersOffset > 0 && datasetsOffset === 0;
   const onlyDatasets = datasetsOffset > 0 && papersOffset === 0;
+  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0;
+
+  // ── Biological Query Resolution (Step 5 — initial load only) ─────────────
+  // Runs before any scientific module to determine the canonical biological
+  // entity the user is searching for.
+  //
+  // Confidence-tier gating:
+  //   HIGH   (≥ 0.90): effectiveQuery = normalizedQuery (auto-applied)
+  //   MEDIUM (0.60–0.89): effectiveQuery = originalQuery (user must accept suggestion)
+  //   LOW    (< 0.60): effectiveQuery = originalQuery (Unknown, no suggestion)
+  //
+  // Load More: the frontend passes resolvedQuery back so we don't re-run the
+  // resolver and so pagination stays aligned with the initial-load query.
+  let resolution: QueryResolution | null = null;
+  let effectiveQuery: string;
+
+  if (isInitialLoad) {
+    resolution = await resolveQuery(query);
+    if (
+      resolution.confidenceTier === "high" &&
+      resolution.normalizedQuery !== resolution.originalQuery
+    ) {
+      // HIGH tier: auto-apply the normalized query to all downstream modules
+      effectiveQuery = resolution.normalizedQuery;
+    } else {
+      // MEDIUM or LOW: use the original query unchanged
+      effectiveQuery = query;
+    }
+  } else {
+    // Load More: use the resolvedQuery the frontend passes back (from initial response).
+    // Falls back to originalQuery if not provided or malformed (backward compatibility).
+    const rq = typeof body.resolvedQuery === "string" ? body.resolvedQuery.trim() : "";
+    effectiveQuery = rq || query;
+  }
 
   let papers: Paper[] = [];
   let papersMeta: PaginationMeta | null = null;
@@ -154,7 +227,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── Run PubMed ─────────────────────────────────────────────────────────────
   if (!onlyDatasets && runPubMed) {
-    const pubmedResult = await searchPubMed(query, {
+    const pubmedResult = await searchPubMed(effectiveQuery, {
       limit,
       offset: papersOffset,
     });
@@ -185,7 +258,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── Run GEO ────────────────────────────────────────────────────────────────
   if (!onlyPapers && runGeo) {
-    const geoResult = await searchGeoDatasets(query, {
+    const geoResult = await searchGeoDatasets(effectiveQuery, {
       limit,
       offset: datasetsOffset,
     });
@@ -216,13 +289,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // load and is not triggered on Load More requests (Phase 5.1 design).
   // It runs sequentially after PubMed + GEO to share the NCBI rate-limit budget.
   // The module is self-rate-limited (350 ms delays between NCBI calls).
-  const isInitialLoad = papersOffset === 0 && datasetsOffset === 0;
-
   let sequences: SequenceResource[] = [];
   let sequencesError: string | undefined;
 
   if (isInitialLoad) {
-    const seqResult = await searchSequenceResources(query);
+    const seqResult = await searchSequenceResources(effectiveQuery);
     sequences = seqResult.data;
     sequencesError = seqResult.error?.message;
   }
@@ -253,6 +324,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     datasets,
     datasetsMeta,
     sequences,
+    resolution,
+    effectiveQuery,
     ...(papersError && { papersError }),
     ...(datasetsError && { datasetsError }),
     ...(sequencesError && { sequencesError }),

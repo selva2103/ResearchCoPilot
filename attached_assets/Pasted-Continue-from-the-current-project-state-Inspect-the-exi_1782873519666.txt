@@ -1,0 +1,363 @@
+Continue from the current project state. Inspect the existing implementation first. If any part of Phase 5.1.5 is already completed, do NOT rewrite it. Continue only the remaining implementation. Preserve backward compatibility and existing architecture.
+
+PHASE 5.1.5 — BIOLOGICAL QUERY RESOLUTION LAYER
+
+CRITICAL CONTEXT — READ BEFORE WRITING ANY CODE
+
+ResearchCoPilot is evolving from a keyword search engine into a biological 
+research platform.
+
+At present: PubMed searches literature, GEO searches expression datasets, 
+Sequence Foundation searches genomic resources — but all three modules 
+receive the user's raw text query directly. This causes a real limitation: 
+a query like "Leukemia" works for PubMed and GEO but returns nothing for 
+Sequence Foundation, because "Leukemia" is not itself a genome or accession.
+
+This phase introduces a dedicated Biological Query Resolution Layer that 
+determines what the user actually searched before any scientific module 
+runs. This becomes the entry point for every future scientific module.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, Retry Logic, 
+ModuleResult, Universal Exploration Framework, PubMed module, GEO module, 
+Sequence Foundation implementation, AI-generated sections, existing 
+frontend layout.
+
+This phase adds a resolver only. It must not change scientific retrieval 
+logic.
+
+--------------------------------------------------
+
+GOAL
+
+Determine "what biological entity did the user actually search?" before 
+any scientific module runs. The resolver normalizes the query and exposes 
+structured metadata that later modules can consume. It should never 
+retrieve full biological resources — only resolve the biological meaning 
+of the query.
+
+--------------------------------------------------
+
+OBJECTIVE
+
+Instead of: User Query → PubMed / GEO / Sequence Foundation (each receiving 
+raw text independently)
+
+The architecture becomes: User Query → Biological Query Resolver → 
+Normalized Query + Confidence-gated resolvedQuery → PubMed / GEO / 
+Sequence Foundation / Future Modules
+
+Every future scientific provider must receive the normalized query instead 
+of the original free-text query whenever confidence allows (see Step 5 — 
+Confidence Tiers, below).
+
+--------------------------------------------------
+
+STEP 1 — QueryResolution Interface
+
+Create a strongly typed QueryResolution interface. Suggested fields:
+originalQuery, normalizedQuery, queryType, confidence, confidenceTier 
+("high" | "medium" | "low" — see Step 5),matchedProvider,
+primaryIdentifier, identifierScheme, scientificName, organism, taxonomyId, 
+relationships
+
+relationships should be a strongly typed object rather than separate
+relatedGenes / relatedProteins / relatedOrganisms arrays.
+
+Suggested structure:
+
+relationships {
+    genes?: string[];
+    proteins?: string[];
+    organisms?: string[];
+    pathways?: string[];
+    variants?: string[];
+    datasets?: string[];
+    publications?: string[];
+}
+
+Only populate the fields supported in this phase (genes, organisms where
+applicable). Leave the remaining fields empty for now. Future phases
+(UniProt, KEGG, Reactome, ClinVar, GEO, PubMed, etc.) will progressively
+enrich this same relationships object instead of introducing new
+top-level fields. synonyms, 
+synonymSource (see Step 9), notes.
+
+Document every field. Use optional fields where appropriate.
+
+--------------------------------------------------
+
+STEP 2 — Query Types and Explicit Detection Rules
+
+Support detection of: Disease, Gene, Genome, Assembly, Organism, Taxonomy, 
+Protein, Transcript, Accession, Chromosome, Plasmid, Contig, Unknown.
+
+The resolver must always classify into exactly one primary type. For each 
+type, write down the CONCRETE detection rule used — not just the priority 
+position. Do not leave detection logic as an implicit judgment call per 
+query; this caused real bugs in earlier phases of this project when left 
+ambiguous. Example concrete rules to follow this pattern (verify exact 
+regex/format against real NCBI accession documentation, do not guess at 
+prefixes):
+- Accession: matches known NCBI accession prefix patterns (NC_, NM_, NR_, 
+  NP_, XP_, YP_, WP_, NG_, GCF_, GCA_, SRR, ERR, DRR, etc.) followed by 
+  digits — confirm the full real prefix list against NCBI documentation 
+  before coding, do not rely on memory.
+- Gene: matches known gene symbol conventions (uppercase alphanumeric, 
+  typically 2-8 characters) AND/OR is found via lookup against NCBI Gene 
+  for the queried term.
+- Organism/Genome/Assembly/Disease/etc.: each needs its own stated rule 
+  (e.g. lookup against NCBI Taxonomy for Organism, lookup against 
+  MedGen/MeSH for Disease) — document the actual lookup or pattern used 
+  for every type listed, not just some of them.
+
+--------------------------------------------------
+
+STEP 3 — Resolution Order
+
+The resolver must always apply the same deterministic order — never guess, 
+never reorder per query. Order: Accession, Assembly, Genome, Gene, Protein, 
+Transcript, Organism, Disease, Taxonomy, Unknown. Document this order, and 
+document that each step's detection rule (Step 2) is what actually 
+determines a match — order alone is not sufficient without those rules.
+
+--------------------------------------------------
+
+STEP 4 — Supported Databases
+
+Use lightweight metadata only.
+
+Preferred providers include:
+
+- NCBI Gene
+- NCBI Taxonomy
+- MedGen
+- HGNC
+- MeSH
+- GeneRIF
+
+The Biological Query Resolver must remain provider-independent.
+
+Future providers may enrich QueryResolution without requiring architectural
+changes to the resolver itself. Only retrieve enough 
+information to resolve the query. Do NOT retrieve sequences, expression 
+matrices, or proteins.
+
+--------------------------------------------------
+
+STEP 5 — CONFIDENCE TIERS AND GATED BEHAVIOR (added per review — this is 
+not optional, it governs how the whole layer behaves)
+
+Every resolution must be assigned to one of three tiers, and the tier must 
+determine downstream behavior, not just be a number displayed on a card:
+
+- HIGH (confidence ≥ 0.90): resolvedQuery is automatically passed to 
+  downstream modules (PubMed, GEO, Sequence Foundation) in place of, or 
+  alongside, originalQuery, per Step 11.
+- MEDIUM (confidence 0.60–0.89): the resolved interpretation is shown to 
+  the user as a suggestion (per Step 10's frontend card), but downstream 
+  modules continue to receive originalQuery by default. The user must be 
+  able to see and accept the suggested resolution to have it applied — do 
+  not auto-apply a medium-confidence guess.
+- LOW (confidence < 0.60): classify as Unknown. Do not attempt to force a 
+  resolution. Downstream modules receive originalQuery unchanged, and the 
+  frontend card should indicate no confident biological interpretation was 
+  found, rather than displaying a low-quality guess as if it were reliable.
+
+State explicitly, per query tested in Step 13, which tier it landed in and 
+confirm the gating behavior above was actually followed for that tier — 
+not just that a confidence number was returned.
+
+--------------------------------------------------
+
+STEP 6 — Disease Resolution
+
+Examples: Leukemia, Down syndrome, Muscular dystrophy, Breast cancer, 
+Tuberculosis. Return: normalized disease name, identifier, confidence, 
+associated genes (if available), associated organisms (if applicable — 
+e.g. Tuberculosis → Mycobacterium tuberculosis as a related organism, but 
+see the synonym/type-independence rule in Step 9). Do NOT expand those 
+genes — simply expose them for future phases.
+
+--------------------------------------------------
+
+STEP 7 — Gene Resolution
+
+Examples: TP53, BRCA1, EGFR, CFTR. Return: official gene symbol, 
+scientific name, organism, identifier, confidence. Do not retrieve 
+transcripts or proteins — those belong to Phase 5.2+.
+
+--------------------------------------------------
+
+STEP 8 — Genome / Assembly Resolution
+
+Examples: SARS-CoV-2, Mycobacterium tuberculosis H37Rv, Arabidopsis 
+thaliana. Return: preferred assembly, reference status, organism, 
+accession, identifier scheme. Reuse the resolution logic (Rules 1-3) 
+already implemented in Sequence Foundation (Phase 5.1) — do not duplicate 
+or reimplement that logic here.
+
+--------------------------------------------------
+
+STEP 9 — Accession Resolution
+
+Recognize identifiers per the concrete prefix list established in Step 2 
+(NC_, NM_, NR_, NP_, XP_, YP_, WP_, NG_, GCF_, GCA_, SRR, ERR, DRR). 
+Return: accession, detected accession type, provider, confidence. Do not 
+retrieve associated records.
+
+--------------------------------------------------
+
+STEP 10 — Synonym Normalization
+
+Resolve common synonyms, e.g.: TB → Tuberculosis → Mycobacterium 
+tuberculosis; COVID → COVID-19 → SARS-CoV-2; AML → Acute Myeloid Leukemia.
+
+Synonym source (clarify, do not leave implicit): prefer drawing synonyms 
+from the existing data sources already listed in Step 4 (MeSH entry terms, 
+MedGen synonyms, NCBI Taxonomy synonyms) wherever they cover the term. Only 
+fall back to a hardcoded synonym list for terms not covered by those 
+sources, and if a hardcoded fallback list is used, document it explicitly 
+in the final report as a known limitation requiring future maintenance — 
+do not bury an undocumented synonym table in code.
+
+Type independence rule: synonym normalization must change normalizedQuery 
+and may populate relatedOrganisms/relatedGenes, but must NOT change 
+queryType. E.g. "Tuberculosis" resolving toward Mycobacterium tuberculosis 
+as a related organism must still classify queryType as "Disease", not 
+silently shift to "Organism" because of the synonym expansion.
+
+Return: original query, normalized query, matched synonym, synonymSource. 
+Document the normalization performed.
+
+--------------------------------------------------
+STEP 10.5 — Ambiguous Resolution
+
+Some biological terms legitimately resolve to multiple entities.
+
+Examples:
+
+TP53
+
+ACTB
+
+GAPDH
+
+ABC1
+
+When multiple biologically valid candidates exist with similar confidence,
+the resolver must NOT silently choose one.
+
+Instead return:
+
+- ambiguityDetected
+- candidateMatches
+- selectedMatch (if one can be selected confidently)
+
+candidateMatches should include:
+
+identifier
+
+displayName
+
+organism
+
+queryType
+
+confidence
+
+If ambiguity cannot be resolved confidently, classify the result as
+MEDIUM confidence and allow the frontend to present the available
+candidates instead of automatically selecting one.
+
+Do not silently guess.   -------------------------------------------------------------
+
+STEP 11 — Frontend
+
+Add a new card above PubMed: "Biological Query Resolution". Display: 
+Detected Type, Confidence (with visible tier — high/medium/low, not just a 
+raw number), Normalized Query, Identifier,Matched Provider, Related Genes 
+(chips only), Related Organisms (chips only). For MEDIUM confidence 
+results, display the suggested resolution with a clear way for the user to 
+accept it (per Step 5) — do not silently auto-apply it. For LOW confidence, 
+clearly indicate no confident match was found rather than showing a guess. 
+Do not redesign the application — reuse the existing card style.
+
+--------------------------------------------------
+
+STEP 12 — Integration
+
+Update the request pipeline so every module can receive both originalQuery 
+and resolvedQuery, with which one is actually used by downstream modules 
+governed by the confidence tier rules in Step 5 — not unconditionally 
+passing resolvedQuery regardless of confidence. Modules must continue 
+working exactly as before if no resolution is available (Unknown/low 
+confidence) — maintain backward compatibility with originalQuery as the 
+fallback in all cases.
+
+--------------------------------------------------
+
+STEP 13 — Error Handling
+
+Differentiate: unknown query, ambiguous query, unsupported identifier, 
+network error, rate limiting, parser failure. Return structured errors 
+consistent with ModuleResult.
+
+--------------------------------------------------
+
+STEP 14 — Validation
+
+Validate with: TP53, BRCA1, Leukemia, Down syndrome, Muscular dystrophy, 
+Tuberculosis, SARS-CoV-2, Arabidopsis thaliana, NC_045512, NM_000546, 
+NP_000537, GCF_000195955.
+
+For each query report: detected type, normalized query, matched provider,
+confidence AND confidence tier, identifier, related genes (if applicable), 
+related organisms (if applicable), resolution path used (which Step 2 
+detection rule actually matched), and explicit confirmation that the 
+gating behavior for that confidence tier (Step 5) was followed correctly 
+for that specific query — i.e. show, don't just claim, that a 
+medium-confidence result was offered as a suggestion rather than 
+auto-applied, and that a low-confidence result fell back to originalQuery.
+
+Do not simply report "works."
+
+--------------------------------------------------
+
+STEP 15 — Regression Testing
+
+Verify with actual evidence, not a blanket claim: PubMed unchanged (test 
+at least one query, show paper count), GEO unchanged (test at least one 
+query, show dataset count), Sequence Foundation unchanged (test at least 
+one query, show resolved accession), Pagination unchanged, no TypeScript 
+errors, no broken imports, no Python modifications, no AI modifications.
+
+--------------------------------------------------
+
+STEP 16 — Future Compatibility
+
+Document that this resolver becomes the single entry point for all future 
+scientific providers: Gene Explorer (5.2), Transcript Explorer (5.3), 
+Protein Explorer (5.4), ENA, SRA, UniProt, AlphaFold, KEGG, Reactome. No 
+future provider should implement its own query classification — they 
+consume QueryResolution's output instead.
+
+--------------------------------------------------
+
+STEP 17 — Final Report
+
+Report: files modified, architecture changes, providers consulted, query 
+classification strategy (with the concrete per-type detection rules from 
+Step 2 spelled out), confidence tier thresholds and how gating was 
+implemented, normalization strategy and synonym source(s) used (including 
+any hardcoded fallback list, flagged explicitly), supported identifier 
+types, supported query types, frontend changes, validation results 
+(per-query, per Step 14), known limitations, future expansion points.
+
+Confirm: no regressions (with evidence per Step 15), no frontend redesign, 
+no Python changes, no AI changes, only the Biological Query Resolution 
+Layer was added, and confidence-tier gating behaves as specified for every 
+validation query rather than only for the easy/high-confidence cases.
