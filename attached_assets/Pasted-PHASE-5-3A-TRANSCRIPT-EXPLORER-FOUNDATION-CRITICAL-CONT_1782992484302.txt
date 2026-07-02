@@ -1,0 +1,339 @@
+PHASE 5.3A — TRANSCRIPT EXPLORER FOUNDATION
+
+CRITICAL CONTEXT — READ BEFORE WRITING ANY CODE
+
+This phase builds the Transcript Foundation only. It is intentionally 
+scoped as a self-contained milestone that ends in a stable, fully working 
+state. Phase 5.3B (a separate phase, separate session) will later add 
+FASTA downloads, CDS retrieval, pagination, and full validation.
+
+Do NOT attempt to implement anything in the Phase 5.3B list. If you finish 
+5.3A early, stop and report — do not continue into 5.3B scope.
+
+ARCHITECTURE POSITION:
+QueryResolution (5.1.5) → Sequence Foundation (5.1) → Gene Explorer (5.2) 
+→ Transcript Explorer Foundation (this phase) → [5.3B enhancements] → 
+Protein Explorer (5.4)
+
+This phase expands GeneRecord.transcripts from an availability flag 
+(built in Phase 5.2) into a real TranscriptRecord list.
+
+--------------------------------------------------
+
+CRITICAL API NOTE — CANONICAL TRANSCRIPT AND MANE SELECT
+
+"Canonical transcript" is NOT a field that NCBI returns directly from 
+EFetch or ESummary. You must NOT invent your own canonical-picking 
+heuristic. Handle it as follows:
+
+For HUMAN genes: MANE Select (Matched Annotation from NCBI and EMBL-EBI) 
+is the official canonical transcript designation. It is available as a tag 
+in the NCBI Gene EFetch response (look for MANE_Select in the transcript 
+list). If a MANE Select transcript exists, mark it as canonical. If a 
+MANE Plus Clinical transcript exists, mark it as such separately.
+
+For NON-HUMAN genes: MANE does not exist. Do NOT apply a canonical label 
+to non-human transcripts based on your own logic. Instead, set 
+isCanonical: null and display nothing in the UI where "canonical" would 
+appear — do not show "canonical" for a mouse or plant transcript just 
+because it is the first result or longest sequence.
+
+This distinction must be implemented correctly and verified in Step 9 
+validation using both a human gene (TP53) and a non-human gene.
+
+Before writing the parser: inspect real NCBI Gene EFetch responses for 
+TP53 and BRCA1 to confirm the actual structure of the transcript list, 
+the field name(s) used for MANE Select status, and the field name(s) used 
+for transcript type (mRNA, ncRNA, etc.). Build the parser against the 
+observed schema, not assumed field names.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, Retry Logic, 
+ModuleResult, Universal Exploration Framework, PubMed, GEO, Sequence 
+Foundation (5.1), Biological Query Resolver (5.1.5), Gene Explorer (5.2), 
+AI-generated sections, existing frontend layout.
+
+Do NOT implement in this phase:
+- Transcript FASTA download
+- CDS download or retrieval
+- Transcript pagination (Load More)
+- Expand/collapse transcript detail panels
+- Transcript sequence retrieval of any kind
+- Protein linkage or protein record fetching
+- Full validation suite (deferred to 5.3B)
+
+Reuse: GeneRecord (Phase 5.2), ModuleResult<T>, Universal Exploration 
+Framework patterns, Retry logic, Rate limiter.
+
+--------------------------------------------------
+
+GOAL
+
+When a user searches TP53 and sees the Gene Explorer card, they should now 
+be able to see a structured list of transcripts for that gene: accession, 
+type, length, status, and whether it is the MANE Select canonical 
+transcript (for human genes). No sequence retrieval, no downloads — just 
+structured metadata that answers "what transcripts exist for this gene?"
+
+--------------------------------------------------
+
+STEP 1 — TranscriptRecord Interface
+
+Create a strongly typed TranscriptRecord interface in 
+types/transcript-record.ts. Fields:
+
+Core fields:
+- transcriptId (string) — NCBI transcript accession (NM_, NR_, XM_, XR_)
+- accessionVersion (string) — full versioned accession e.g. NM_000546.6
+- transcriptType - isProteinCoding (boolean) — derived deterministically from the
+  transcript accession type and/or NCBI Gene annotation.
+  NM_ and XM_ transcripts should normally be true.
+  NR_ and XR_ transcripts should always be false.
+  Do not infer beyond the annotation returned by NCBI.("mRNA" | "ncRNA" | "predicted_mRNA" | "predicted_ncRNA" 
+  | "other") — derived from accession prefix per the rules below
+- geneId (string) — parent NCBI Gene ID, linking back to GeneRecord
+- geneSymbol (string) — parent gene symbol
+- organism (string)
+- transcriptLength (number | null) — length in nucleotides (nt), not bp 
+  — use "nt" as the unit everywhere, not "bp"
+- exonCount (number | null)
+- status ("Reviewed" | "Validated" | "Provisional" | "Predicted" | 
+  "Inferred" | "Model" | null) — use NCBI's actual RefSeq status values, 
+  not a simplified binary
+- isCanonical (boolean | null) — true only when MANE Select confirmed; 
+  null for non-human genes (see Critical API Note above); never false-positive
+- maneSelectAccession (string | null) — the MANE Select accession if 
+  applicable
+- manePlusClinical (boolean) — true if this transcript is also MANE Plus 
+  Clinical
+- sourceDatabase ("ncbi-refseq")
+- ncbiTranscriptUrl (string) — constructed from accessionVersion
+
+Accession prefix → transcriptType mapping (apply deterministically):
+- NM_ → "mRNA" (curated)
+- NR_ → "ncRNA" (curated)  
+- XM_ → "predicted_mRNA"
+- XR_ → "predicted_ncRNA"
+- anything else → "other"
+
+Document every field with JSDoc. Mark optional fields as optional.
+
+--------------------------------------------------
+
+STEP 2 — File Structure
+
+lib/transcript/fetch.ts — fetch transcript list for a given NCBI Gene ID
+lib/transcript/parser.ts — normalize NCBI response into TranscriptRecord[]
+lib/transcript/index.ts — orchestrate and return ModuleResult<TranscriptRecord>
+
+Keep the transcript module entirely separate from the gene module. It 
+receives a geneId as input, not a raw query string — the Gene Explorer 
+(Phase 5.2) resolves the gene first, then passes the geneId to the 
+transcript module.
+
+--------------------------------------------------
+
+STEP 3 — Data Retrieval
+
+The transcript list for a gene is available via NCBI Gene EFetch (db=gene) 
+— the same EFetch call used by Gene Explorer (Phase 5.2) Path A. Do NOT 
+make a separate ESearch for transcripts. Reuse the gene record response 
+to extract the transcript list, or pass the already-fetched gene data 
+into the transcript parser, rather than making a redundant NCBI call.
+
+If the gene record is already available in the current request context 
+(from Phase 5.2's fetch), use it directly. This avoids one unnecessary 
+Entrez call per query and reduces rate-limit pressure.
+
+Transcript extraction must reuse the exact Gene EFetch response already 
+retrieved by Phase 5.2. Do NOT perform a second Gene EFetch within the 
+same request. If the same gene is expanded multiple times during one 
+session, reuse the already-parsed TranscriptRecord[] rather than 
+re-parsing the Gene EFetch response. Document the caching strategy used 
+(e.g. in-memory Map keyed by geneId) in the final report.
+
+For each transcript in the list, retrieve only what is available in the 
+gene record response for this phase — do NOT make individual EFetch calls 
+per transcript to retrieve sequence data. That belongs to Phase 5.3B.
+
+--------------------------------------------------
+
+STEP 4 — Rate Limit Awareness
+
+Because transcript data is extracted from the gene record (Step 3), this 
+phase should add ZERO additional Entrez API calls per query when the gene 
+record is reused. Confirm this in the final report — if the implementation 
+requires any additional Entrez calls beyond what Phase 5.2 already makes, 
+explain why and document the call count explicitly.
+
+--------------------------------------------------
+
+STEP 5 — Integration with GeneRecord (Phase 5.2)
+
+Update GeneRecord.transcripts (currently an availability flag) to include 
+the actual TranscriptRecord list when available:
+
+transcripts: {
+  available: boolean,
+  count: number | null,
+  records: TranscriptRecord[] | null,  // null until fetched
+  maneSelectPresent: boolean | null     // null for non-human
+}
+
+Do NOT change any other GeneRecord fields. Do not break Phase 5.2's 
+existing behavior — if the transcript fetch fails, the gene card must 
+still display correctly with transcripts showing as "available" without 
+the record list.
+
+--------------------------------------------------
+
+STEP 6 — /api/analyze Integration
+
+Update app/api/analyze/route.ts to include the transcript list in the 
+response when a gene query is made. The transcript fetch should be 
+triggered automatically when the Gene Explorer resolves a gene — the 
+user should not need to take any action to see the transcript list.
+
+Maintain backward compatibility — non-gene queries (PubMed, GEO, etc.) 
+must be completely unaffected.
+
+--------------------------------------------------
+
+STEP 7 — Frontend: Transcript Explorer Card
+
+Add a "Transcript Explorer" section within or below the Gene Explorer 
+card. Reuse existing card style — do NOT redesign the application.
+
+Display per transcript:
+- Accession + version (e.g. NM_000546.6) — linked to NCBI
+- Accession prefix badge (NM_, NR_, XM_, XR_) displayed as a small 
+  distinct badge alongside the accession. This allows researchers to 
+  immediately distinguish curated RefSeq transcripts from predicted 
+  transcripts without expanding the row. Style it visually distinct from 
+  the MANE Select and status badges — it represents the data source 
+  class, not quality or canonicality.
+- Transcript type label ("mRNA", "ncRNA", "Predicted mRNA", etc.)
+- Length in nt (e.g. "2591 nt") — always show unit, never bare number
+- Exon count (if available, else "not available")
+- RefSeq status badge (Reviewed / Validated / Predicted / etc.)
+- MANE Select badge — shown ONLY when isCanonical is true (human genes). 
+  For non-human genes, this badge must NOT appear at all, not even 
+  greyed out.
+- MANE Plus Clinical badge — shown only when manePlusClinical is true
+
+List ordering: MANE Select transcript first (if exists), then by 
+transcriptType (curated before predicted), then by length descending.
+
+Stub for Phase 5.3B (visible but not yet functional):
+- "View Sequence" button — disabled, with tooltip "Available in next 
+  update" — do NOT wire this to any functionality yet
+- "Download FASTA" button — same treatment
+
+Do NOT add expand/collapse panels in this phase. The transcript list is 
+flat for now.
+
+--------------------------------------------------
+
+STEP 8 — Error Handling
+
+Use ModuleResult consistently:
+- No transcripts found → status: "empty", display "No RefSeq transcripts 
+  found for this gene." — do not leave the section blank
+- Transcript fetch failed → status: "error", gene card still visible, 
+  transcript section shows "Transcript data temporarily unavailable."
+- Partial transcript data → status: "partial", show what was retrieved
+
+Never crash the gene card because transcripts failed.
+
+--------------------------------------------------
+
+STEP 9 — Validation (targeted, not full suite — full suite is Phase 5.3B)
+
+Test these specific queries and report actual values, not "works":
+
+TP53 (human, should have MANE Select):
+- Total transcript count
+- MANE Select accession (exact value)
+- At least 3 transcript accessions with type and length
+- Confirm MANE Select badge appears in UI
+- Confirm non-human badge rule is NOT triggered
+
+BRCA1 (human, multiple transcripts):
+- Total transcript count
+- MANE Select accession
+- Mix of NM_ and predicted types if present
+
+Mouse Trp53 (non-human — confirm canonical logic is suppressed):
+- Total transcript count
+- Confirm isCanonical is null for all records
+- Confirm NO MANE Select badge appears in UI
+
+SARS-CoV-2 (non-gene query — confirm transcript section does not appear):
+- Confirm transcript module is NOT invoked for a genome/assembly query
+
+For each test: show exact accession values, types, lengths — do not report 
+"transcript list populated" without the actual data.
+
+--------------------------------------------------
+
+STEP 10 — Regression Testing
+
+With actual evidence:
+- Gene Explorer (Phase 5.2): search TP53, confirm gene card still shows 
+  correct Gene ID, coordinates, HGNC ID
+- PubMed: search "TP53", confirm paper count unchanged
+- GEO: search "TP53", confirm dataset count unchanged
+- No TypeScript errors
+- No Python changes
+- No AI changes
+
+--------------------------------------------------
+
+STEP 11 — End State Documentation
+
+At the end of this phase, document clearly for the Phase 5.3B handoff:
+
+1. File structure created (exact paths)
+2. TranscriptRecord interface (exact field names and types as implemented)
+3. How transcripts are fetched (which NCBI call, reused from gene record 
+   or separate)
+4. How GeneRecord.transcripts was updated
+5. What the "View Sequence" and "Download FASTA" stub buttons look like 
+   and where they are in the code
+6. Any known limitations or deviations from this spec
+7. Exact Entrez call count per query after 5.3A (for 5.3B rate-limit 
+   planning)
+
+8. Document exactly how Phase 5.4 (Protein Explorer) should consume 
+   TranscriptRecord. Specify which TranscriptRecord fields are expected 
+   to be reused directly by the protein module (e.g. proteinAccession, 
+   accessionVersion, geneId) and which fields will require additional 
+   NCBI lookups in Phase 5.4 (e.g. fetching protein metadata from 
+   db=protein using the proteinAccession). This documentation becomes 
+   the implementation guide for Phase 5.4 — write it as a concrete list, 
+   not a vague description.
+
+This documentation is the handoff to Phase 5.3B. Write it as if the 
+reader has not seen this prompt.
+
+--------------------------------------------------
+
+STEP 12 — Final Report
+
+Report:
+- Files modified
+- TranscriptRecord interface as implemented
+- NCBI API response structure observed for transcript list in TP53
+- MANE Select field name(s) as observed in real response
+- Entrez call count per query (must be zero additional calls vs Phase 5.2 
+  if gene record is reused)
+- Validation results per Step 9 (exact accession values shown)
+- Regression results per Step 10
+- Known limitations
+- Complete end-state documentation per Step 11
+
+Confirm: no regressions, no 5.3B scope implemented, no Python changes, 
+no AI changes, app is fully stable and runnable at end of this phase.
