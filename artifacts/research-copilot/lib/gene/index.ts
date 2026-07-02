@@ -73,8 +73,20 @@ import { fetchGeneLinks } from "./links";
 import { parseGeneRecord } from "./parser";
 
 // ── Gene symbol pattern ───────────────────────────────────────────────────────
-// Mirrors resolver/gene.ts — uppercase letters+digits, 2–13 chars.
-const GENE_SYMBOL_RE = /^[A-Z][A-Z0-9]{1,12}$/;
+// Matches common gene symbol formats across organisms:
+//   Human:  TP53, BRCA1, EGFR (all uppercase + digits)
+//   Mouse:  Trp53, Brca1, Cdkn2a (leading uppercase or mixed-case)
+//   Plant:  rbcL, lacZ (mixed-case with at least one uppercase or digit)
+// Guard: at least one uppercase letter OR digit prevents generic lowercase
+// words ("kinase", "protein", "receptor") from routing through symbol search.
+const GENE_SYMBOL_RE = /^[A-Za-z][A-Za-z0-9]{1,12}$/;
+
+function looksLikeGeneSymbol(s: string): boolean {
+  if (!GENE_SYMBOL_RE.test(s)) return false;
+  // Require at least one uppercase letter OR digit — screens out common lowercase
+  // words ("kinase", "receptor") that are not gene symbols.
+  return /[A-Z0-9]/.test(s);
+}
 
 // ── Accession types that gate out the gene module ─────────────────────────────
 // When the resolver identified any of these types at HIGH confidence, the gene
@@ -166,7 +178,7 @@ export async function searchGeneExplorer(
     }
 
     // ── Case B/C: ESearch needed ───────────────────────────────────────────────
-    const isSymbol = GENE_SYMBOL_RE.test(q);
+    const isSymbol = looksLikeGeneSymbol(q);
 
     if (isSymbol) {
       return await resolveBySymbol(q, limit, offset, resolution, startedAt);

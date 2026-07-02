@@ -1,0 +1,334 @@
+PHASE 5.2 — GENE EXPLORER (FINAL VALIDATION & COMPLETION)
+
+IMPORTANT
+
+Do NOT rebuild the Gene Explorer.
+
+Do NOT redesign the architecture.
+
+Do NOT rewrite working code.
+
+Do NOT refactor unless a real bug is discovered during validation.
+
+The implementation phase is already complete. This task is only to finish the remaining validation, bug fixing, regression testing, and documentation required to officially complete Phase 5.2.
+
+
+---
+
+STEP 1 — Review Current Implementation
+
+Before making any changes:
+
+Read the existing Gene Explorer implementation.
+
+Confirm that the implementation already includes:
+
+Gene search
+
+Metadata extraction
+
+EFetch integration
+
+ESummary integration
+
+Cross-database enrichment
+
+Frontend Gene Explorer section
+
+API integration
+
+Query Resolver integration
+
+
+
+Do not rewrite any of these if they already exist.
+
+
+---
+
+STEP 2 — Complete Validation
+
+Run the complete validation suite using real NCBI APIs.
+
+Validate at least:
+
+Human genes
+
+TP53
+
+BRCA1
+
+EGFR
+
+CFTR
+
+PTEN
+
+APOE
+
+
+Non-human genes
+
+Trp53
+
+WRKY33
+
+lacZ
+
+rbcL
+
+
+Gene families
+
+kinase
+
+MAPK
+
+MYC
+
+
+Organism-context queries
+
+Human TP53
+
+Mouse TP53
+
+Arabidopsis WRKY33
+
+
+
+---
+
+For every query verify:
+
+Gene ID
+
+Official Symbol
+
+Full Name
+
+Organism
+
+Chromosome
+
+Coordinates
+
+Strand
+
+Gene summary
+
+Aliases
+
+Gene type (if available)
+
+OMIM
+
+HGNC
+
+Ensembl
+
+External links
+
+ModuleResult status
+
+
+Do not simply report "works."
+
+
+---
+
+STEP 3 — Cross-Database Validation
+
+Verify that every external identifier comes from the correct source.
+
+Examples:
+
+HGNC
+
+Ensembl
+
+OMIM
+
+GeneRIF
+
+
+If a field is unavailable from NCBI for a particular gene, report it explicitly rather than fabricating a value.
+
+
+---
+
+STEP 4 — Multi-Organism Validation
+
+Verify that the resolver correctly handles genes existing in multiple organisms.
+
+Examples:
+
+TP53
+
+EGFR
+
+MYC
+
+
+Confirm:
+
+Human prioritization works when appropriate.
+
+Other organisms remain accessible.
+
+No duplicate records appear.
+
+Organism metadata remains correct.
+
+
+
+---
+
+STEP 5 — Partial Result Handling
+
+Force failures where possible.
+
+Examples:
+
+Disable ELink temporarily.
+
+Simulate missing enrichment.
+
+Missing summaries.
+
+
+Confirm the module returns partial results rather than failing completely.
+
+Previously retrieved metadata must remain visible.
+
+
+---
+
+STEP 6 — Frontend Validation
+
+Verify all Gene Explorer UI states:
+
+Loading
+
+Success
+
+No Gene Found
+
+Partial Result
+
+Error
+
+Rate Limited
+
+
+Ensure cards remain consistent with the existing application style.
+
+Do not redesign the UI.
+
+
+---
+
+STEP 7 — Regression Testing
+
+Verify with actual evidence:
+
+PubMed still works.
+
+GEO still works.
+
+Sequence Foundation still works.
+
+Biological Query Resolution still works.
+
+Universal Pagination still works.
+
+Load More still works.
+
+No TypeScript errors.
+
+No broken imports.
+
+No Python changes.
+
+No AI changes.
+
+
+
+---
+
+STEP 8 — Bug Discovery
+
+If validation discovers any bug:
+
+1. Explain the root cause.
+
+
+2. Fix it immediately.
+
+
+3. Re-run validation.
+
+
+4. Confirm the fix.
+
+
+
+Do NOT leave discovered bugs unfixed.
+
+If no bugs are found, explicitly state that the validation completed without requiring code changes.
+
+
+---
+
+STEP 9 — Performance Review
+
+Verify:
+
+No unnecessary NCBI API calls.
+
+Gene metadata is not fetched multiple times unnecessarily.
+
+Existing pagination architecture remains unchanged.
+
+Existing retry logic is reused.
+
+Existing rate limiter is respected.
+
+
+
+---
+
+STEP 10 — Final Report
+
+Provide:
+
+Files modified (if any)
+
+Bugs discovered
+
+Bugs fixed
+
+Validation results for every query
+
+Regression testing results
+
+Cross-database validation results
+
+Known limitations
+
+Future expansion points
+
+
+Explicitly confirm:
+
+Phase 5.2 implementation is complete.
+
+Gene Explorer is production-ready within the current project scope.
+
+No regressions were introduced.
+
+No architecture changes were required beyond bug fixes.
+
+
+
+---
