@@ -1,4 +1,5 @@
 {
+  "/api/transcript/download/route": "app/api/transcript/download/route.js",
   "/_not-found/page": "app/_not-found/page.js",
   "/api/analyze/route": "app/api/analyze/route.js",
   "/results/page": "app/results/page.js"

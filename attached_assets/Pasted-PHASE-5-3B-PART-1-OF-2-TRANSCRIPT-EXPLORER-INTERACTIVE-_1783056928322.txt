@@ -1,0 +1,268 @@
+PHASE 5.3B — PART 1 OF 2 — TRANSCRIPT EXPLORER: INTERACTIVE FEATURES
+
+IMPORTANT: IMPORTANT:
+
+If daily credits are exhausted before completion:
+
+1. Finish the current file before stopping.
+2. Do not leave partially written or syntactically broken files.
+3. Commit only working, type-checking code.
+4. Write a continuation report describing:
+   - completed work
+   - remaining work
+   - files modified
+   - next exact step.
+ THIS IS A SELF-CONTAINED HANDOFF DOCUMENT.
+This phase continues from Phase 5.3A. This prompt contains everything 
+you need — do not assume memory of any previous conversation.
+
+DO NOT implement Part 2 scope even if credits remain. Stop at the 
+checkpoint defined at the bottom of this prompt.
+
+--------------------------------------------------
+
+BEFORE WRITING ANY CODE
+
+Inspect the current repository state first. Determine what Phase 5.3A 
+actually built — do not assume the file list below is exactly correct, 
+since 5.3A may have made minor variations.
+
+Read only these files before starting:
+- lib/transcript/fetch.ts
+- lib/transcript/parser.ts
+- lib/transcript/index.ts
+- types/transcript-record.ts
+- The gene types file containing GeneRecord
+- app/api/analyze/route.ts
+- The existing Transcript Explorer UI component from 5.3A
+
+Do not read unrelated modules (PubMed, GEO, Sequence Foundation, etc.).
+
+--------------------------------------------------
+
+STATE AT END OF PHASE 5.3A (verify against actual repo before trusting)
+
+Architecture position:
+QueryResolution (5.1.5) → Sequence Foundation (5.1) → Gene Explorer (5.2) 
+→ Transcript Explorer Foundation (5.3A) → [this phase] → 5.3B-Part2 
+→ Phase 5.3C → Protein Explorer (5.4)
+
+Files created in 5.3A:
+- lib/transcript/fetch.ts
+- lib/transcript/parser.ts
+- lib/transcript/index.ts
+- types/transcript-record.ts
+
+TranscriptRecord fields (as built in 5.3A):
+- transcriptId, accessionVersion, accessionPrefix, transcriptType, 
+  geneId, geneSymbol, organism, transcriptLength (in nt), exonCount, 
+  status, isCanonical, maneSelectAccession, manePlusClinical, 
+  proteinAccession, proteinAccessionVersion, sourceDatabase, 
+  ncbiTranscriptUrl
+
+GeneRecord.transcripts (updated in 5.3A):
+- available, count, records (TranscriptRecord[] | null), 
+  maneSelectPresent (boolean | null)
+
+Frontend from 5.3A:
+- Flat transcript list (no expand/collapse yet)
+- "View Sequence" and "Download FASTA" stub buttons — visible but 
+  disabled with tooltip "Available in next update"
+- NO pagination yet
+
+What is NOT yet built (scope of this prompt and Part 2):
+- Expand/collapse transcript rows
+- Functional FASTA download
+- CDS retrieval
+- Non-coding transcript label
+- Transcript summaries
+- Pagination
+- Lazy loading
+- Full validation suite
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, PubMed, GEO, 
+Sequence Foundation (5.1), Biological Query Resolver (5.1.5), Gene 
+Explorer (5.2 core behavior), AI-generated sections.
+
+Do NOT implement in this prompt: transcript summaries, pagination (Load 
+More), lazy loading of detail fields, full validation suite — those are 
+Part 2.
+
+Reuse: TranscriptRecord (5.3A), GeneRecord (5.2), ModuleResult<T>, 
+Retry logic, Rate limiter.
+
+--------------------------------------------------
+
+GOAL OF THIS PROMPT
+
+By the end of this prompt, a user who searches TP53 should be able to:
+1. See the transcript list (from 5.3A — already working)
+2. Click any transcript row to expand its details
+3. Download the transcript FASTA sequence for any transcript
+4. Download the CDS sequence for protein-coding transcripts
+5. See "Non-coding transcript" label for NR_/XR_ transcripts
+
+The app must be fully stable and runnable at the end of this prompt.
+
+--------------------------------------------------
+
+STEP 1 — Expand/Collapse Transcript Details
+
+Replace the flat transcript list (5.3A) with expandable transcript rows. 
+Each transcript row, when clicked/expanded, reveals:
+- Full accession + version
+- Transcript type and status
+- Length in nt + exon count
+- MANE Select / MANE Plus Clinical badges (human only, per 5.3A rules — 
+  do NOT show for non-human genes)
+- Genomic location of this transcript (chromosome, start, end, strand) 
+  — only if available from the already-fetched response, no extra API call
+- "Download FASTA" button (now functional — see Step 2)
+- "Download CDS" button for NM_/XM_ only (see Step 3)
+- "Non-coding transcript" label for NR_/XR_ (see Step 3)
+
+Collapsed state shows: accession prefix badge, accession + version, 
+transcript type label, length in nt, status badge, MANE badge (if human).
+Expanded state shows all of the above.
+
+Accordion style by default — only one row expanded at a time. 
+Do NOT auto-expand all transcripts on load.
+
+--------------------------------------------------
+
+STEP 2 — Transcript FASTA Download
+
+Wire the "Download FASTA" button for each transcript. When clicked:
+- Fetch transcript sequence via NCBI EFetch:
+  db=nuccore, id={accessionVersion}, rettype=fasta, retmode=text
+- Trigger browser download of the FASTA content
+- Filename: {accessionVersion}.fasta (e.g. NM_000546.6.fasta)
+- Fetch on demand only — do NOT pre-fetch on page load
+- Show loading state on the button while fetching
+- Show error state with retry option if fetch fails
+- Every download call must go through the existing ncbi_entrez_limiter — 
+  do not bypass the rate limiter for any reason
+- If two FASTA downloads are triggered rapidly, the second must wait for 
+  the limiter, not fire concurrently unthrottled
+
+--------------------------------------------------
+
+STEP 3 — CDS Retrieval and Non-coding Label
+
+For NM_ and XM_ transcripts (protein-coding):
+- Wire "Download CDS" button. When clicked:
+  db=nuccore, id={accessionVersion}, rettype=fasta_cds_na, retmode=text
+- Trigger browser download
+- Filename: {accessionVersion}_CDS.fasta
+- Same lazy-fetch, loading state, error state, and rate-limit rules 
+  as Step 2
+
+For NR_ and XR_ transcripts (non-coding RNA):
+- Do NOT show a CDS button — not even disabled
+- In the expanded detail panel, display the label "Non-coding transcript" 
+  in a clearly visible position so users understand why CDS is absent
+- This label is meaningful, not a placeholder — ncRNA transcripts 
+  genuinely have no CDS
+
+--------------------------------------------------
+
+STEP 4 — Error Handling
+
+Handle all of these states cleanly:
+- Individual transcript expand failure (detail data unavailable) — show 
+  error message inside the expanded row only, other rows unaffected
+- FASTA download failure — error state on that button with retry, other 
+  transcripts unaffected
+- CDS download failure — same pattern as FASTA
+- Rate limit hit during download — show "NCBI rate limit reached, please 
+  wait a moment" near the affected button
+
+Never crash the gene card or transcript list because one download failed.
+Previously loaded transcript rows must always remain visible regardless 
+of any individual operation's failure.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any bug, TypeScript error, integration issue, UI regression, or 
+incorrect behavior is discovered during implementation:
+1. Explain the root cause
+2. Fix it immediately
+3. Re-run affected tests
+4. Continue only after the issue passes
+Do not leave known bugs unresolved.
+
+--------------------------------------------------
+
+TARGETED VALIDATION (not full suite — that is Part 2)
+
+Run these specific tests and report actual values:
+
+TP53 (human):
+- Expand one NM_ transcript — confirm detail fields visible
+- Download FASTA for that transcript — show first 2 lines of file content 
+  in the report, confirm filename is correct
+- Download CDS for same transcript — confirm filename correct
+- Expand one NR_ transcript (if exists) — confirm "Non-coding transcript" 
+  label visible, confirm NO CDS button present
+
+BRCA1 (human):
+- Expand one transcript — confirm details appear
+- Confirm MANE Select badge shows on correct transcript only
+
+Mouse Trp53 (non-human):
+- Expand one transcript — confirm NO MANE badge in expanded view
+- Confirm FASTA download works for non-human transcript
+
+Rapid-click FASTA test:
+- Trigger Download FASTA on two different transcripts quickly
+- Confirm rate limiter governs both — no concurrent unthrottled requests
+
+Show actual values (file lines, accessions, badge presence) — 
+do not report "works."
+
+--------------------------------------------------
+
+REGRESSION TESTING
+
+With actual values shown:
+- Gene Explorer: search TP53 — show Gene ID and HGNC ID
+- PubMed: search "TP53" — show paper count
+- GEO: search "TP53" — show dataset count
+- Confirm 5.3A transcript list still displays correctly for TP53
+- No TypeScript errors, no Python changes, no AI changes
+
+--------------------------------------------------
+
+END STATE DOCUMENTATION (required for Part 2 handoff)
+
+After implementation document:
+1. Exact files modified or created
+2. How expand/collapse state is managed (React state, which component)
+3. Exact EFetch parameters used for FASTA and CDS downloads
+4. Where in the code the rate limiter is called for downloads
+5. Which transcript fields are shown in collapsed vs expanded state
+6. Whether any additional API calls are made on expand (should be zero 
+   if genomic coords come from already-fetched data)
+7. Entrez call count for a typical TP53 session with one expand + 
+   one FASTA download
+8. Any known limitations or deviations from this spec
+
+--------------------------------------------------
+
+STOP HERE
+
+Do NOT implement in this session:
+- Transcript summaries (Part 2)
+- Pagination / Load More for transcripts (Part 2)
+- Lazy loading of additional detail fields (Part 2)
+- Full validation suite (Part 2)
+- Any Phase 5.3C or 5.4 scope
+
+If implementation is complete and credits remain, write the end state 
+documentation and stop. Do not start Part 2 scope.

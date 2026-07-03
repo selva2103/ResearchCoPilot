@@ -150,3 +150,29 @@ export async function fetchManeInfo(
 
   return { maneSelectAccessions, manePlusClinicalAccessions };
 }
+
+// ── Per-transcript sequence EFetch (Phase 5.3B) ──────────────────────────────
+
+/**
+ * Fetch a single transcript's sequence from NCBI nuccore as plain-text FASTA.
+ *
+ *   rettype="fasta"         → full transcript (mRNA/ncRNA) sequence. Valid for any
+ *                              accession (NM_/NR_/XM_/XR_).
+ *   rettype="fasta_cds_na"  → coding sequence (CDS) only. Only meaningful for
+ *                              protein-coding transcripts (NM_/XM_) — callers must
+ *                              reject NR_/XR_ before calling with this rettype.
+ *
+ * This is a NEW Entrez call added in Phase 5.3B, made on-demand (button click),
+ * never eagerly on page load. Callers are responsible for rate-limit sequencing
+ * (see app/api/transcript/download/route.ts).
+ */
+export async function fetchTranscriptSequence(
+  accessionVersion: string,
+  rettype: "fasta" | "fasta_cds_na"
+): Promise<string> {
+  const url =
+    `${NCBI_BASE}/efetch.fcgi?db=nuccore` +
+    `&id=${encodeURIComponent(accessionVersion)}` +
+    `&rettype=${rettype}&retmode=text`;
+  return ncbiFetch(url, true) as Promise<string>;
+}

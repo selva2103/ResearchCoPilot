@@ -357,6 +357,22 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
   const { available, count, records, maneSelectPresent } = gene.transcripts;
   const isHumanGene = gene.taxonomyId === "9606";
 
+  // Accordion state — at most one transcript row expanded at a time, scoped to
+  // this gene's transcript list. Starts fully collapsed (no auto-expand).
+  const [expandedAccession, setExpandedAccession] = useState<string | null>(null);
+  const [expandError, setExpandError] = useState<string | null>(null);
+
+  const handleToggle = (accessionVersion: string) => {
+    try {
+      setExpandError(null);
+      setExpandedAccession((prev) => (prev === accessionVersion ? null : accessionVersion));
+    } catch {
+      // Defensive — expand/collapse is pure client state and should never throw,
+      // but per spec the gene card must never crash on an expand failure.
+      setExpandError("Unable to expand this transcript row. Please try again.");
+    }
+  };
+
   return (
     <div className="pt-3 border-t border-slate-100 dark:border-slate-700/50 space-y-3">
       <div className="flex items-center gap-2">
@@ -390,11 +406,20 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
         </p>
       )}
 
+      {expandError && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">⚠️ {expandError}</p>
+      )}
+
       {/* Flat list of transcript rows */}
       {records && records.length > 0 && (
         <div className="space-y-2">
           {records.map((t) => (
-            <TranscriptRow key={t.accessionVersion} transcript={t} />
+            <TranscriptRow
+              key={t.accessionVersion}
+              transcript={t}
+              isExpanded={expandedAccession === t.accessionVersion}
+              onToggleExpand={() => handleToggle(t.accessionVersion)}
+            />
           ))}
         </div>
       )}
@@ -402,7 +427,40 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
   );
 }
 
-function TranscriptRow({ transcript }: { transcript: TranscriptRecord }) {
+// ─── Client-side sequential download queue ─────────────────────────────────────
+// All FASTA/CDS downloads (across every transcript row on the page) are funneled
+// through this single module-level promise chain so that rapid clicks never fire
+// concurrent requests to the download API — matching the "sequential, not
+// concurrent" NCBI rate-limit requirement. The API route itself also serializes
+// via GENE_RATE_DELAY_MS/sleep server-side; this queue keeps the client UX
+// (loading states) honestly sequential too.
+let clientDownloadChain: Promise<void> = Promise.resolve();
+
+function enqueueDownload<T>(task: () => Promise<T>): Promise<T> {
+  const result = clientDownloadChain.then(task, task);
+  clientDownloadChain = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
+type DownloadStatus = "idle" | "loading" | "error";
+interface DownloadState {
+  status: DownloadStatus;
+  message?: string;
+  rateLimited?: boolean;
+}
+
+function TranscriptRow({
+  transcript,
+  isExpanded,
+  onToggleExpand,
+}: {
+  transcript: TranscriptRecord;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+}) {
   const prefixColor: Record<TranscriptRecord["accessionPrefix"], string> = {
     NM_: "bg-emerald-600 text-white",
     NR_: "bg-teal-600 text-white",
@@ -419,72 +477,257 @@ function TranscriptRow({ transcript }: { transcript: TranscriptRecord }) {
     other: "Other",
   };
 
+  const isCoding =
+    transcript.accessionPrefix === "NM_" || transcript.accessionPrefix === "XM_";
+
+  const [fastaState, setFastaState] = useState<DownloadState>({ status: "idle" });
+  const [cdsState, setCdsState] = useState<DownloadState>({ status: "idle" });
+
+  const runDownload = (kind: "fasta" | "cds") => {
+    const setState = kind === "fasta" ? setFastaState : setCdsState;
+    setState({ status: "loading" });
+
+    enqueueDownload(async () => {
+      try {
+        const res = await fetch(
+          `/api/transcript/download?accession=${encodeURIComponent(
+            transcript.accessionVersion
+          )}&type=${kind}`
+        );
+
+        if (!res.ok) {
+          let message = `Download failed (HTTP ${res.status}).`;
+          let rateLimited = res.status === 429;
+          try {
+            const body = (await res.json()) as { error?: string; rateLimited?: boolean };
+            if (body.error) message = body.error;
+            if (body.rateLimited) rateLimited = true;
+          } catch {
+            // Response wasn't JSON — keep the generic message above.
+          }
+          setState({ status: "error", message, rateLimited });
+          return;
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") ?? "";
+        const filenameMatch = disposition.match(/filename="([^"]+)"/);
+        const filename =
+          filenameMatch?.[1] ??
+          `${transcript.accessionVersion}${kind === "cds" ? "_cds" : ""}.fasta`;
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        setState({ status: "idle" });
+      } catch (err) {
+        setState({
+          status: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Network error — could not reach the download service.",
+        });
+      }
+    }).catch(() => {
+      // enqueueDownload itself never rejects (errors are caught above), but
+      // guard defensively so a queue failure can never crash the gene card.
+      setState({
+        status: "error",
+        message: "Download failed unexpectedly. Please try again.",
+      });
+    });
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 dark:bg-slate-900/40 px-3 py-2">
-      <span
-        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${prefixColor[transcript.accessionPrefix]}`}
-        title="Curated (NM_/NR_) vs computationally predicted (XM_/XR_)"
+    <div className="rounded-lg bg-slate-50 dark:bg-slate-900/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        aria-expanded={isExpanded}
+        className="w-full flex flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
       >
-        {transcript.accessionPrefix === "other" ? "OTHER" : transcript.accessionPrefix.slice(0, -1)}
-      </span>
+        <span
+          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${prefixColor[transcript.accessionPrefix]}`}
+          title="Curated (NM_/NR_) vs computationally predicted (XM_/XR_)"
+        >
+          {transcript.accessionPrefix === "other" ? "OTHER" : transcript.accessionPrefix.slice(0, -1)}
+        </span>
 
-      <a
-        href={transcript.ncbiTranscriptUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-xs font-mono text-emerald-700 dark:text-emerald-400 hover:underline font-medium"
+        <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 font-medium">
+          {transcript.accessionVersion}
+        </span>
+
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          {typeLabel[transcript.transcriptType]}
+        </span>
+
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          {transcript.transcriptLength !== null
+            ? `${transcript.transcriptLength.toLocaleString()} nt`
+            : "length not available"}
+        </span>
+
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          {transcript.exonCount !== null ? `${transcript.exonCount} exons` : "exon count not available"}
+        </span>
+
+        {transcript.status && (
+          <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
+            {transcript.status}
+          </span>
+        )}
+
+        {transcript.isCanonical === true && (
+          <span className="text-xs font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 px-2 py-0.5 rounded-full">
+            MANE Select
+          </span>
+        )}
+
+        {transcript.manePlusClinical && (
+          <span className="text-xs font-semibold bg-fuchsia-100 dark:bg-fuchsia-900/40 text-fuchsia-800 dark:text-fuchsia-200 px-2 py-0.5 rounded-full">
+            MANE Plus Clinical
+          </span>
+        )}
+
+        <span className="ml-auto text-slate-400 dark:text-slate-500 text-xs">
+          {isExpanded ? "▲ Hide details" : "▼ Show details"}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div className="px-3 pb-3 pt-1 border-t border-slate-200 dark:border-slate-700/60 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 pt-2">
+            <DetailField label="Transcript ID" value={transcript.transcriptId} />
+            <DetailField
+              label="Protein"
+              value={transcript.proteinAccessionVersion}
+              href={
+                transcript.proteinAccessionVersion
+                  ? `https://www.ncbi.nlm.nih.gov/protein/${transcript.proteinAccessionVersion}`
+                  : null
+              }
+              fallback={isCoding ? "Not available" : "N/A — non-coding"}
+            />
+            <DetailField label="Source" value="NCBI RefSeq" />
+          </div>
+
+          <a
+            href={transcript.ncbiTranscriptUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
+          >
+            View on NCBI Nucleotide ↗
+          </a>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <DownloadButton
+              label="Download FASTA"
+              state={fastaState}
+              onClick={() => runDownload("fasta")}
+            />
+
+            {isCoding ? (
+              <DownloadButton
+                label="Download CDS"
+                state={cdsState}
+                onClick={() => runDownload("cds")}
+              />
+            ) : (
+              <span
+                className="text-xs text-slate-400 dark:text-slate-500 italic px-2 py-1"
+                title="Non-coding RNA transcripts have no coding sequence"
+              >
+                Non-coding transcript
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailField({
+  label,
+  value,
+  href,
+  fallback = "Not available",
+}: {
+  label: string;
+  value: string | null;
+  href?: string | null;
+  fallback?: string;
+}) {
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">{label}</p>
+      {value ? (
+        href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline font-mono"
+          >
+            {value} ↗
+          </a>
+        ) : (
+          <span className="text-xs text-slate-600 dark:text-slate-300 font-mono">{value}</span>
+        )
+      ) : (
+        <span className="text-xs text-slate-400 dark:text-slate-500 italic">{fallback}</span>
+      )}
+    </div>
+  );
+}
+
+function DownloadButton({
+  label,
+  state,
+  onClick,
+}: {
+  label: string;
+  state: DownloadState;
+  onClick: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={state.status === "loading"}
+        className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+          state.status === "error"
+            ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50"
+            : "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/50"
+        } disabled:opacity-60 disabled:cursor-wait`}
       >
-        {transcript.accessionVersion} ↗
-      </a>
-
-      <span className="text-xs text-slate-500 dark:text-slate-400">
-        {typeLabel[transcript.transcriptType]}
-      </span>
-
-      <span className="text-xs text-slate-500 dark:text-slate-400">
-        {transcript.transcriptLength !== null
-          ? `${transcript.transcriptLength.toLocaleString()} nt`
-          : "length not available"}
-      </span>
-
-      <span className="text-xs text-slate-500 dark:text-slate-400">
-        {transcript.exonCount !== null ? `${transcript.exonCount} exons` : "exon count not available"}
-      </span>
-
-      {transcript.status && (
-        <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
-          {transcript.status}
-        </span>
+        {state.status === "loading" ? (
+          <span className="flex items-center gap-1.5">
+            <LoadingSpinner />
+            Preparing…
+          </span>
+        ) : state.status === "error" ? (
+          `Retry ${label}`
+        ) : (
+          label
+        )}
+      </button>
+      {state.status === "error" && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400 max-w-[220px] leading-snug">
+          {state.rateLimited
+            ? "⚠️ NCBI rate limit hit — please wait a moment and try again."
+            : `⚠️ ${state.message ?? "Download failed."}`}
+        </p>
       )}
-
-      {transcript.isCanonical === true && (
-        <span className="text-xs font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 px-2 py-0.5 rounded-full">
-          MANE Select
-        </span>
-      )}
-
-      {transcript.manePlusClinical && (
-        <span className="text-xs font-semibold bg-fuchsia-100 dark:bg-fuchsia-900/40 text-fuchsia-800 dark:text-fuchsia-200 px-2 py-0.5 rounded-full">
-          MANE Plus Clinical
-        </span>
-      )}
-
-      <div className="ml-auto flex gap-1.5">
-        <button
-          disabled
-          title="Available in next update"
-          className="text-xs text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full cursor-not-allowed"
-        >
-          View Sequence
-        </button>
-        <button
-          disabled
-          title="Available in next update"
-          className="text-xs text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full cursor-not-allowed"
-        >
-          Download FASTA
-        </button>
-      </div>
     </div>
   );
 }
