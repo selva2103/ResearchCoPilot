@@ -1,6 +1,5 @@
 {
-  "/api/transcript/download/route": "app/api/transcript/download/route.js",
-  "/_not-found/page": "app/_not-found/page.js",
+  "/api/transcript/summary/route": "app/api/transcript/summary/route.js",
   "/api/analyze/route": "app/api/analyze/route.js",
-  "/results/page": "app/results/page.js"
+  "/page": "app/page.js"
 }

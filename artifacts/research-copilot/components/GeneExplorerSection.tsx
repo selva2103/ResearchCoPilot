@@ -31,7 +31,7 @@
  *   The UI notes this in the expandable resources footer of non-primary cards.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { GeneRecord } from "@/types/gene-record";
 import type { TranscriptRecord } from "@/types/transcript-record";
 
@@ -353,14 +353,20 @@ function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean })
 
 // ─── Transcript Explorer sub-section ───────────────────────────────────────────
 
+const TRANSCRIPT_PAGE_SIZE = 10;
+
 function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
   const { available, count, records, maneSelectPresent } = gene.transcripts;
   const isHumanGene = gene.taxonomyId === "9606";
 
-  // Accordion state — at most one transcript row expanded at a time, scoped to
-  // this gene's transcript list. Starts fully collapsed (no auto-expand).
+  // Accordion state — at most one transcript row expanded at a time.
   const [expandedAccession, setExpandedAccession] = useState<string | null>(null);
   const [expandError, setExpandError] = useState<string | null>(null);
+
+  // Pagination state — client-side slice of the already-fetched records[].
+  // All records are in memory; no extra Entrez calls are made for Load More.
+  const [visibleCount, setVisibleCount] = useState(TRANSCRIPT_PAGE_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   const handleToggle = (accessionVersion: string) => {
     try {
@@ -373,6 +379,26 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
     }
   };
 
+  const handleLoadMore = () => {
+    if (isLoadingMore) return;
+    setIsLoadingMore(true);
+    // Use requestAnimationFrame so the disabled state renders before the count
+    // updates — this prevents a rapid double-click from processing twice before
+    // React batches the state change.
+    requestAnimationFrame(() => {
+      setVisibleCount((v) => v + TRANSCRIPT_PAGE_SIZE);
+      setIsLoadingMore(false);
+    });
+  };
+
+  const allRecords = records ?? [];
+  const visibleRecords = allRecords.slice(0, visibleCount);
+  const hasMoreTranscripts = allRecords.length > visibleCount;
+  // "All transcripts loaded" is shown only when pagination was actually used
+  // (i.e. there were more than one page worth of results).
+  const showAllLoaded =
+    allRecords.length > TRANSCRIPT_PAGE_SIZE && !hasMoreTranscripts;
+
   return (
     <div className="pt-3 border-t border-slate-100 dark:border-slate-700/50 space-y-3">
       <div className="flex items-center gap-2">
@@ -380,7 +406,7 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
         <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wide">
           Transcript Explorer
         </p>
-        {records && records.length > 0 && (
+        {allRecords.length > 0 && (
           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">
             {count} transcript{count !== 1 ? "s" : ""}
           </span>
@@ -410,10 +436,10 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
         <p className="text-xs text-amber-600 dark:text-amber-400">⚠️ {expandError}</p>
       )}
 
-      {/* Flat list of transcript rows */}
-      {records && records.length > 0 && (
+      {/* Paginated list — only visibleCount rows rendered at a time */}
+      {allRecords.length > 0 && (
         <div className="space-y-2">
-          {records.map((t) => (
+          {visibleRecords.map((t) => (
             <TranscriptRow
               key={t.accessionVersion}
               transcript={t}
@@ -422,6 +448,37 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
             />
           ))}
         </div>
+      )}
+
+      {/* Load More button — shown while there are hidden transcripts */}
+      {hasMoreTranscripts && (
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={handleLoadMore}
+            disabled={isLoadingMore}
+            className="text-xs font-semibold px-4 py-2 rounded-full transition-all disabled:opacity-50 disabled:cursor-wait bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50"
+          >
+            {isLoadingMore ? (
+              <span className="flex items-center gap-2">
+                <LoadingSpinner />
+                Loading…
+              </span>
+            ) : (
+              "Load More Transcripts"
+            )}
+          </button>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            {visibleCount} of {allRecords.length}
+          </p>
+        </div>
+      )}
+
+      {/* Exhausted state — only after pagination was used */}
+      {showAllLoaded && (
+        <p className="text-xs text-slate-400 dark:text-slate-500 text-center pt-1">
+          All transcripts loaded
+        </p>
       )}
     </div>
   );
@@ -482,6 +539,34 @@ function TranscriptRow({
 
   const [fastaState, setFastaState] = useState<DownloadState>({ status: "idle" });
   const [cdsState, setCdsState] = useState<DownloadState>({ status: "idle" });
+
+  // Lazy transcript summary — fetched once on first expand, never on page load.
+  // undefined = not yet fetched; null = fetched but no summary available; string = summary text.
+  const [summary, setSummary] = useState<string | null | undefined>(undefined);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  useEffect(() => {
+    // Only fetch when expanded for the first time (summary === undefined).
+    if (!isExpanded || summary !== undefined) return;
+    let cancelled = false;
+    setSummaryLoading(true);
+    fetch(
+      `/api/transcript/summary?accession=${encodeURIComponent(transcript.accessionVersion)}`
+    )
+      .then((r) => r.json())
+      .then((data: { summary?: string | null; error?: string }) => {
+        if (!cancelled) setSummary(data.summary ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSummary(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isExpanded, summary, transcript.accessionVersion]);
 
   const runDownload = (kind: "fasta" | "cds") => {
     const setState = kind === "fasta" ? setFastaState : setCdsState;
@@ -617,6 +702,28 @@ function TranscriptRow({
             />
             <DetailField label="Source" value="NCBI RefSeq" />
           </div>
+
+          {/* Transcript-level RefSeq summary — lazy-loaded on first expand.
+              Omitted entirely when no summary is available (no empty card/placeholder). */}
+          {summaryLoading && (
+            <div className="flex items-center gap-1.5">
+              <LoadingSpinner />
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                Loading summary…
+              </span>
+            </div>
+          )}
+          {!summaryLoading && summary && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium uppercase tracking-wide">
+                RefSeq Summary
+              </p>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                {summary}
+              </p>
+            </div>
+          )}
+          {/* summary === null → no section rendered (intentional per spec) */}
 
           <a
             href={transcript.ncbiTranscriptUrl}

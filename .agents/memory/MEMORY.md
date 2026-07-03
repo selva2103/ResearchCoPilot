@@ -1,3 +1,4 @@
 - [Starlette exception handler quirk](starlette-exception-handler.md) — @app.exception_handler(Exception) cannot be tested via HTTP in Starlette 0.40; test the handler function directly.
 - [MedGen ESummary API quirks](medgen-api-quirks.md) — semantictype is { value: string } not string; broad disease queries return subtypes first, not canonical concept.
 - [Disease resolver normalizedQuery strategy](resolver-disease-normalization.md) — partial matches use originalQuery as normalizedQuery, not the MedGen subtype title.
+- [Transcript Summary API](transcript-summary-api.md) — nuccore ESummary has no `comment` field; use EFetch rettype=gb and parse "Transcript Variant:" paragraph from COMMENT section.
