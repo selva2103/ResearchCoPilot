@@ -112,15 +112,17 @@ export function parseGeneRecord(
   const omimUrl = omimId ? `https://www.omim.org/entry/${omimId}` : null;
 
   // ── Transcript / protein availability flags ─────────────────────────────────
-  // estimatedCount: exoncount from genomicinfo is a proxy for number of exons,
-  // which gives a rough lower bound on transcript count (actual transcript count
-  // can be higher for alternatively spliced genes). Explicitly labeled as "lower bound"
-  // in the UI.
+  // exonCount from genomicinfo is used only as an initial "available" heuristic
+  // before the Transcript Explorer module runs. count/records/maneSelectPresent
+  // are filled in by app/api/analyze/route.ts after calling searchTranscripts()
+  // for the primary resolved gene — this parser has no NCBI transcript data yet.
   const exonCount = gi?.exoncount ?? null;
 
   const transcripts: GeneRecord["transcripts"] = {
     available: exonCount !== null && exonCount > 0,
-    estimatedCount: exonCount,
+    count: null,
+    records: null,
+    maneSelectPresent: null,
   };
 
   // Proteins: mark as available when gene has exons (heuristic; not definitive)

@@ -30,13 +30,17 @@
  *   - ensemblId: extracted from Bgee ELink URL. Not available for all genes —
  *     null when Bgee has no entry (e.g. some non-model-organism genes).
  *
- * Phase 5.3 expansion: GeneRecord.transcripts will expand from an availability
- * flag into actual TranscriptRecord objects. The core GeneRecord fields MUST NOT
- * change between phases — only new fields may be added.
+ * Phase 5.3A: GeneRecord.transcripts expanded from an availability-only stub into
+ * { available, count, records, maneSelectPresent }. records is populated for the
+ * primary resolved gene only (see app/api/analyze/route.ts); null when transcript
+ * search was not run or failed outright. maneSelectPresent is null for non-human
+ * genes (MANE does not apply) — never false.
  *
  * Phase 5.4 expansion: GeneRecord.proteins will similarly expand into
  * ProteinRecord objects.
  */
+
+import type { TranscriptRecord } from "./transcript-record";
 
 // ─── GeneRecord ───────────────────────────────────────────────────────────────
 
@@ -180,14 +184,20 @@ export interface GeneRecord {
   // phases — only the data inside may be enriched.
 
   /**
-   * Transcript availability flag.
-   * estimatedCount: derived from ESummary genomicinfo[0].exoncount (a lower bound —
-   * actual transcript count requires separate EFetch/RefSeq call).
-   * Phase 5.3 expands this into full TranscriptRecord objects.
+   * Transcript Explorer data (Phase 5.3A).
+   *   available:          true when at least one RefSeq transcript is known/likely.
+   *   count:              exact transcript count once fetched; null when not yet fetched
+   *                       or fetch failed. Never a heuristic/estimate once populated.
+   *   records:            full TranscriptRecord[] for the primary resolved gene; null
+   *                       when transcript search was not run for this record or failed.
+   *   maneSelectPresent:  true/false once known for a human gene; null for non-human
+   *                       genes (MANE does not apply) or when undetermined.
    */
   transcripts: {
     available: boolean;
-    estimatedCount: number | null;
+    count: number | null;
+    records: TranscriptRecord[] | null;
+    maneSelectPresent: boolean | null;
   };
 
   /**

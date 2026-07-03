@@ -39,10 +39,12 @@
  *   - Gene has no transcripts in gene_table → status: "empty"
  *
  * Phase 5.4 handoff:
- *   TranscriptRecord does NOT yet contain protein accession (NP_) — this is parsed
- *   from peptide-type Gene-commentary elements in the EFetch XML (Phase 5.4 scope).
- *   The gene_table format does list protein isoform lines, but these are skipped here
- *   as protein linkage is out of scope for Phase 5.3A.
+ *   TranscriptRecord.proteinAccession / proteinAccessionVersion are populated directly
+ *   from gene_table protein isoform lines when present (NM_/XM_ transcripts only).
+ *   When a coding transcript's protein line cannot be parsed, these fields are null
+ *   with a `// TODO Phase 5.4: fetch protein accession via ELink db=gene→db=protein`
+ *   marker in lib/transcript/parser.ts — Phase 5.4 can reuse geneId/proteinAccession
+ *   as-is and only needs to backfill the null cases via ELink.
  */
 
 import type { TranscriptRecord } from "@/types/transcript-record";

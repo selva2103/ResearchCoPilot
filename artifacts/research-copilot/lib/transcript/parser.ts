@@ -12,8 +12,15 @@
  *   RNA transcript variant 14 NR_176326.1, 10 exons,  total annotated spliced exon length: 2399
  *   mRNA transcript variant X2 XM_030245922.1, 12 exons,  total annotated spliced exon length: 1881
  *
+ * Protein lines (used, not skipped, for NM_/XM_ transcripts):
+ *   Immediately follow their transcript line, e.g.:
+ *     "protein isoform g NP_001263690.1 (CCDS73969.1), 8 coding  exons, ..."
+ *     "protein isoform i NP_001394198.1, 7 coding  exons, ..."
+ *   The protein accession is parsed from this line and attached to the transcript
+ *   record directly above it. Confirmed via live gene_table inspection (TP53, 2026-07-03):
+ *   the protein line for a coding transcript is always the line immediately after it.
+ *
  * Lines that are NOT transcript lines (skipped):
- *   - Protein lines: "protein isoform a NP_000537.3 ..."
  *   - Exon table headers and coordinate lines
  *   - Gene header and annotation lines
  *   - Blank lines
@@ -30,6 +37,7 @@
 import type { TranscriptRecord } from "@/types/transcript-record";
 import {
   transcriptTypeFromAccession,
+  accessionPrefixFromAccession,
   isProteinCodingFromAccession,
   refseqStatusFromAccession,
 } from "@/types/transcript-record";
@@ -40,6 +48,11 @@ import type { ManeInfo } from "./fetch";
 // Groups:  [1]=accessionVersion [2]=exonCount [3]=transcriptLength
 const TRANSCRIPT_LINE_RE =
   /^(?:mRNA|RNA|ncRNA|tRNA|rRNA|precursor_RNA|tmRNA|scRNA|snoRNA|snRNA|misc_RNA|miscRNA)\s+transcript\s+variant\s+\S+\s+(\S+),\s+(\d+)\s+exons,\s+total\s+annotated\s+spliced\s+exon\s+length:\s+(\d+)/i;
+
+// ── Protein line regex ────────────────────────────────────────────────────────
+// Matches: "protein isoform {label} {ACC.VER} (optional CCDS), {N} coding  exons, ..."
+// Groups:  [1]=proteinAccessionVersion (NP_/XP_ only)
+const PROTEIN_LINE_RE = /^protein\s+isoform\s+\S+\s+([NX]P_[\d.]+)/i;
 
 // ── Main parser ───────────────────────────────────────────────────────────────
 
@@ -77,8 +90,8 @@ export function parseGeneTable(
   const maneSelectSet = new Set(maneInfo?.maneSelectAccessions ?? []);
   const manePlusSet = new Set(maneInfo?.manePlusClinicalAccessions ?? []);
 
-  for (const line of lines) {
-    const match = TRANSCRIPT_LINE_RE.exec(line.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const match = TRANSCRIPT_LINE_RE.exec(lines[i].trim());
     if (!match) continue;
 
     const accessionVersion = match[1]; // e.g. "NM_000546.6"
@@ -91,8 +104,28 @@ export function parseGeneTable(
       dotIdx >= 0 ? accessionVersion.slice(0, dotIdx) : accessionVersion;
 
     const transcriptType = transcriptTypeFromAccession(accessionVersion);
+    const accessionPrefix = accessionPrefixFromAccession(accessionVersion);
     const isProteinCoding = isProteinCodingFromAccession(accessionVersion);
     const status = refseqStatusFromAccession(accessionVersion);
+
+    // ── Protein accession (NM_/XM_ only) ────────────────────────────────────
+    // The protein line for a coding transcript is always the line immediately
+    // after its transcript line (confirmed via live gene_table inspection).
+    let proteinAccession: string | null = null;
+    let proteinAccessionVersion: string | null = null;
+    if (accessionPrefix === "NM_" || accessionPrefix === "XM_") {
+      const nextLine = (lines[i + 1] ?? "").trim();
+      const proteinMatch = PROTEIN_LINE_RE.exec(nextLine);
+      if (proteinMatch) {
+        proteinAccessionVersion = proteinMatch[1];
+        const pDot = proteinAccessionVersion.lastIndexOf(".");
+        proteinAccession =
+          pDot >= 0 ? proteinAccessionVersion.slice(0, pDot) : proteinAccessionVersion;
+      }
+      // else: proteinAccession stays null.
+      // TODO Phase 5.4: fetch protein accession via ELink db=gene→db=protein
+    }
+    // NR_/XR_ (non-coding) — proteinAccession is always null, no TODO (ncRNA has no protein).
 
     // MANE logic: only for human genes
     let isCanonical: boolean | null = null;
@@ -113,6 +146,7 @@ export function parseGeneTable(
     const record: TranscriptRecord = {
       transcriptId,
       accessionVersion,
+      accessionPrefix,
       transcriptType,
       isProteinCoding,
       geneId,
@@ -124,6 +158,8 @@ export function parseGeneTable(
       isCanonical,
       maneSelectAccession: maneSelectAccVer,
       manePlusClinical,
+      proteinAccession,
+      proteinAccessionVersion,
       sourceDatabase: "ncbi-refseq",
       ncbiTranscriptUrl: `https://www.ncbi.nlm.nih.gov/nuccore/${accessionVersion}`,
     };

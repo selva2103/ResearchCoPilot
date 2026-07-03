@@ -62,6 +62,13 @@ export interface TranscriptRecord {
   transcriptType: "mRNA" | "ncRNA" | "predicted_mRNA" | "predicted_ncRNA" | "other";
 
   /**
+   * Raw NCBI accession prefix this transcript was derived from.
+   * Used by the UI to render a small, distinct curated-vs-predicted badge
+   * (NM_/NR_ = curated, XM_/XR_ = computationally predicted).
+   */
+  accessionPrefix: "NM_" | "NR_" | "XM_" | "XR_" | "other";
+
+  /**
    * True when the transcript is protein-coding.
    * Derived deterministically from accession prefix:
    *   NM_ and XM_ → true (coding mRNA, curated or predicted)
@@ -154,6 +161,20 @@ export interface TranscriptRecord {
 
   // ── Source and links ─────────────────────────────────────────────────────────
 
+  /**
+   * Unversioned protein accession (NP_ for curated NM_, XP_ for predicted XM_).
+   * null for NR_/XR_ transcripts (non-coding RNA has no protein).
+   * null with a Phase 5.4 TODO in the parser when a coding transcript's protein
+   * accession could not be extracted from the gene_table response.
+   */
+  proteinAccession: string | null;
+
+  /**
+   * Versioned protein accession, e.g. "NP_000537.3".
+   * Same availability rules as proteinAccession.
+   */
+  proteinAccessionVersion: string | null;
+
   /** Always "ncbi-refseq". Documents the authoritative source. */
   sourceDatabase: "ncbi-refseq";
 
@@ -174,6 +195,17 @@ export function transcriptTypeFromAccession(
   if (accession.startsWith("NR_")) return "ncRNA";
   if (accession.startsWith("XM_")) return "predicted_mRNA";
   if (accession.startsWith("XR_")) return "predicted_ncRNA";
+  return "other";
+}
+
+/** Derive accessionPrefix from accession (used for curated-vs-predicted badge). */
+export function accessionPrefixFromAccession(
+  accession: string
+): TranscriptRecord["accessionPrefix"] {
+  if (accession.startsWith("NM_")) return "NM_";
+  if (accession.startsWith("NR_")) return "NR_";
+  if (accession.startsWith("XM_")) return "XM_";
+  if (accession.startsWith("XR_")) return "XR_";
   return "other";
 }
 

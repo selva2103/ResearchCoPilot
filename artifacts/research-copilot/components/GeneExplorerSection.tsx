@@ -33,6 +33,7 @@
 
 import { useState } from "react";
 import type { GeneRecord } from "@/types/gene-record";
+import type { TranscriptRecord } from "@/types/transcript-record";
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -304,10 +305,10 @@ function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean })
         <div className="flex flex-wrap gap-2">
           <ResourceBadge
             label="Transcripts"
-            count={gene.transcripts.estimatedCount}
+            count={gene.transcripts.count}
             available={gene.transcripts.available}
             future={false}
-            title="Phase 5.3 — Transcript Explorer"
+            title="Transcript Explorer — see below"
           />
           <ResourceBadge
             label="Proteins"
@@ -339,8 +340,150 @@ function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean })
           />
         </div>
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          Transcript/protein counts are lower-bound estimates from exon data.
+          Protein counts are lower-bound estimates from exon data. Transcript counts
+          below are exact once loaded.
         </p>
+      </div>
+
+      {/* ── Transcript Explorer (Phase 5.3A) ─────────────────────────────── */}
+      {isPrimary && <TranscriptExplorer gene={gene} />}
+    </div>
+  );
+}
+
+// ─── Transcript Explorer sub-section ───────────────────────────────────────────
+
+function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
+  const { available, count, records, maneSelectPresent } = gene.transcripts;
+  const isHumanGene = gene.taxonomyId === "9606";
+
+  return (
+    <div className="pt-3 border-t border-slate-100 dark:border-slate-700/50 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-sm">🧬</span>
+        <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wide">
+          Transcript Explorer
+        </p>
+        {records && records.length > 0 && (
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">
+            {count} transcript{count !== 1 ? "s" : ""}
+          </span>
+        )}
+        {isHumanGene && maneSelectPresent === true && (
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">
+            MANE Select present
+          </span>
+        )}
+      </div>
+
+      {/* Error state — transcript fetch failed outright */}
+      {records === null && !available && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          Transcript data temporarily unavailable.
+        </p>
+      )}
+
+      {/* Empty state — fetch succeeded but zero transcripts */}
+      {records !== null && records.length === 0 && (
+        <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+          No RefSeq transcripts found for this gene.
+        </p>
+      )}
+
+      {/* Flat list of transcript rows */}
+      {records && records.length > 0 && (
+        <div className="space-y-2">
+          {records.map((t) => (
+            <TranscriptRow key={t.accessionVersion} transcript={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TranscriptRow({ transcript }: { transcript: TranscriptRecord }) {
+  const prefixColor: Record<TranscriptRecord["accessionPrefix"], string> = {
+    NM_: "bg-emerald-600 text-white",
+    NR_: "bg-teal-600 text-white",
+    XM_: "bg-slate-400 text-white",
+    XR_: "bg-slate-400 text-white",
+    other: "bg-slate-400 text-white",
+  };
+
+  const typeLabel: Record<TranscriptRecord["transcriptType"], string> = {
+    mRNA: "mRNA",
+    ncRNA: "ncRNA",
+    predicted_mRNA: "Predicted mRNA",
+    predicted_ncRNA: "Predicted ncRNA",
+    other: "Other",
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 dark:bg-slate-900/40 px-3 py-2">
+      <span
+        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${prefixColor[transcript.accessionPrefix]}`}
+        title="Curated (NM_/NR_) vs computationally predicted (XM_/XR_)"
+      >
+        {transcript.accessionPrefix === "other" ? "OTHER" : transcript.accessionPrefix.slice(0, -1)}
+      </span>
+
+      <a
+        href={transcript.ncbiTranscriptUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-xs font-mono text-emerald-700 dark:text-emerald-400 hover:underline font-medium"
+      >
+        {transcript.accessionVersion} ↗
+      </a>
+
+      <span className="text-xs text-slate-500 dark:text-slate-400">
+        {typeLabel[transcript.transcriptType]}
+      </span>
+
+      <span className="text-xs text-slate-500 dark:text-slate-400">
+        {transcript.transcriptLength !== null
+          ? `${transcript.transcriptLength.toLocaleString()} nt`
+          : "length not available"}
+      </span>
+
+      <span className="text-xs text-slate-500 dark:text-slate-400">
+        {transcript.exonCount !== null ? `${transcript.exonCount} exons` : "exon count not available"}
+      </span>
+
+      {transcript.status && (
+        <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
+          {transcript.status}
+        </span>
+      )}
+
+      {transcript.isCanonical === true && (
+        <span className="text-xs font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 px-2 py-0.5 rounded-full">
+          MANE Select
+        </span>
+      )}
+
+      {transcript.manePlusClinical && (
+        <span className="text-xs font-semibold bg-fuchsia-100 dark:bg-fuchsia-900/40 text-fuchsia-800 dark:text-fuchsia-200 px-2 py-0.5 rounded-full">
+          MANE Plus Clinical
+        </span>
+      )}
+
+      <div className="ml-auto flex gap-1.5">
+        <button
+          disabled
+          title="Available in next update"
+          className="text-xs text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full cursor-not-allowed"
+        >
+          View Sequence
+        </button>
+        <button
+          disabled
+          title="Available in next update"
+          className="text-xs text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full cursor-not-allowed"
+        >
+          Download FASTA
+        </button>
       </div>
     </div>
   );

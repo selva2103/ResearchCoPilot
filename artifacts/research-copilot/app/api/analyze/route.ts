@@ -3,6 +3,8 @@ import { searchPubMed } from "@/lib/pubmed";
 import { searchGeoDatasets } from "@/lib/geo";
 import { searchSequenceResources } from "@/lib/genbank";
 import { searchGeneExplorer } from "@/lib/gene";
+import { GENE_RATE_DELAY_MS, sleep } from "@/lib/gene/search";
+import { searchTranscripts } from "@/lib/transcript";
 import { resolveQuery } from "@/lib/resolver";
 import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
@@ -354,6 +356,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         currentPage: geneResult.currentPage ?? 1,
         totalPages: geneResult.totalPages ?? 0,
         hitUpstreamLimit: geneResult.hitUpstreamLimit ?? false,
+      };
+    }
+
+    // ── Run Transcript Explorer (Phase 5.3A) for the primary resolved gene ────
+    // Only the first (primary) gene gets full TranscriptRecord[] — matches the
+    // "resolved gene" semantics used elsewhere in this route. Non-gene queries
+    // never reach this branch (runGenes is false, genes stays empty).
+    if (genes.length > 0) {
+      const primary = genes[0];
+      await sleep(GENE_RATE_DELAY_MS);
+      const transcriptResult = await searchTranscripts(
+        primary.geneId,
+        primary.officialSymbol,
+        primary.organism,
+        primary.taxonomyId
+      );
+
+      const isHumanGene = primary.taxonomyId === "9606";
+      const fetchFailed = transcriptResult.status === "error";
+
+      genes[0] = {
+        ...primary,
+        transcripts: {
+          available: transcriptResult.data.length > 0,
+          count: fetchFailed ? null : transcriptResult.data.length,
+          records: fetchFailed ? null : transcriptResult.data,
+          maneSelectPresent: fetchFailed
+            ? null
+            : isHumanGene
+            ? transcriptResult.data.some((t) => t.isCanonical === true)
+            : null,
+        },
       };
     }
   }
