@@ -1,0 +1,195 @@
+PHASE 5.3C PART 1 — HARDENING AND VERIFICATION
+
+PROJECT CONTEXT — READ FIRST
+ResearchCoPilot is already updated to the latest GitHub commit.
+Pull the latest repository before starting.
+
+CREDIT SAFETY RULE — READ BEFORE ANYTHING ELSE
+If credits are running low at any point during this session:
+1. Finish the current file before stopping — never leave broken syntax
+2. Ensure TypeScript passes before committing
+3. Commit only working code
+4. Write PHASE-5.3C-PART1-REPORT.md to the repository root containing:
+   - Completed steps (list exactly which of Steps 1-5 are fully done)
+   - Bugs found and fixed (with file names and descriptions)
+   - Bugs found but NOT yet fixed (if any)
+   - Entrez audit results if completed (or "not reached" if not)
+   - Exact next step for Part 2 to continue from
+   - Any files modified
+This report is the handoff to Part 2. Part 2 will read it before writing
+any code. If it does not exist or is incomplete, Part 2 will waste credits
+re-auditing completed work.
+
+--------------------------------------------------
+
+IMPORTANT
+No new functionality. No Protein Explorer. No UI redesign.
+Only: verify, harden, fix bugs, prepare for Phase 5.4.
+
+Do NOT modify: PubMed, GEO, Sequence Foundation, Query Resolver,
+Python FastAPI, Redis, AI sections.
+
+--------------------------------------------------
+
+READ ONLY THESE FILES BEFORE STARTING
+- lib/transcript/fetch.ts
+- lib/transcript/parser.ts
+- lib/transcript/index.ts
+- types/transcript-record.ts
+- GeneRecord type file
+- app/api/analyze/route.ts
+- app/api/transcript/download/route.ts
+- Transcript Explorer UI component
+- Gene Explorer module (for protein stub verification in Step 4)
+
+Do not read PubMed, GEO, Python, Resolver, or Sequence modules
+unless a specific regression in Step 5 requires it.
+
+--------------------------------------------------
+
+IMPORTANT — DO NOT REBUILD COMPLETED WORK
+
+Before implementing any fix, first verify whether the behavior is already
+correct in the current repository.
+
+If a step already passes, document it and do NOT rewrite the code.
+
+Only modify files when:
+- a real bug is confirmed,
+- a regression is found, or
+- hardening is specifically required for Phase 5.4.
+
+--------------------------------------------------
+
+STEP 1 — Full Chain Verification
+
+Verify the complete pipeline for each test query:
+Query → Gene → Transcript → Expand → CDS download
+
+For each step confirm:
+- Identifiers are never truncated between steps (e.g. NM_000546.6 must
+  not silently become NM_000546 when passed to CDS fetch)
+- accessionVersion is preserved exactly through every handoff
+- ModuleResult status is correct at each step (not "success" when data
+  is partial)
+- proteinAccession field is populated or has the Phase 5.4 TODO comment
+
+Test queries: TP53, BRCA1, TTN, mouse Trp53
+
+Report per query: each step's output identifier, ModuleResult status,
+and whether any truncation or transformation was detected.
+
+--------------------------------------------------
+
+STEP 2 — Entrez Call Audit
+
+Document the exact Entrez calls for a TP53 search session.
+For each scenario list: database, endpoint, parameters, call count.
+
+Scenario A — page load only
+Scenario B — page load + expand one transcript
+Scenario C — page load + expand + FASTA download
+Scenario D — page load + expand + CDS download
+
+If total calls exceed 8:
+- First determine whether the calls are expected because PubMed, GEO,
+  Sequence Foundation, Gene Explorer, and Transcript Explorer all execute
+  together for a single query — this is by design, not a bug.
+- Only optimize if duplicate or redundant Entrez calls are confirmed
+  (e.g. the same gene EFetch being made twice in one request).
+- Do NOT redesign module architecture solely to reduce call count.
+The ncbi_entrez_limiter is shared across all modules — document the
+total count so Phase 5.4 can account for it when adding protein calls.
+
+--------------------------------------------------
+
+STEP 3 — MANE Select Verification
+
+Human genes (TP53, BRCA1):
+- Confirm exactly one transcript has isCanonical: true
+- Confirm maneSelectAccession matches the real NCBI MANE Select value
+  (TP53: NM_000546.6, BRCA1: verify against live NCBI)
+- Confirm MANE Select badge appears exactly once in UI
+- Confirm MANE Plus Clinical badge appears only where manePlusClinical
+  is true (not for every transcript)
+
+Mouse Trp53 (non-human):
+- Confirm isCanonical is null for ALL transcripts (not false)
+- Confirm NO MANE Select badge appears anywhere in UI
+- Confirm maneSelectPresent is null in GeneRecord.transcripts (not false)
+
+Fix any bug found immediately before continuing.
+
+--------------------------------------------------
+
+STEP 4 — Protein Linkage Verification (most important for Phase 5.4)
+
+This is the primary output Part 2 and Phase 5.4 depend on.
+Verify and document with precision:
+
+4a. TranscriptRecord.proteinAccession field:
+- For NM_ transcripts: is proteinAccession populated with an NP_
+  accession, or null with the TODO comment? Show actual values for
+  at least 3 NM_ transcripts from TP53.
+- For XM_ transcripts: same check
+- For NR_/XR_ transcripts: confirm proteinAccession is null with NO
+  TODO comment (ncRNA has no protein — this is correct, not a gap)
+
+4b. GeneRecord.availableResources.proteins:
+- Confirm the proteins stub shows available: true and a count
+- Confirm it has NOT been accidentally reset to null by any 5.3 work
+
+4c. UI protein stub:
+- Confirm the "Proteins" section in the Gene Explorer card is visible
+- Confirm it shows "Available" or equivalent — not wired to any
+  functionality yet
+- Confirm Phase 5.4 can activate it by implementing a click handler
+  without changing the card layout
+
+Document exactly: for each NM_ transcript tested, whether proteinAccession
+is populated directly or requires an ELink call in Phase 5.4, and which
+TranscriptRecord fields Phase 5.4 will consume directly.
+
+--------------------------------------------------
+
+STEP 5 — Error Handling Audit
+
+Trigger or simulate each failure and confirm correct behavior:
+- Gene fetch failure → transcript section shows error, gene card visible
+- Empty transcript list → "No RefSeq transcripts found for this gene."
+- Individual transcript expand failure → error in that row only
+- FASTA download failure → error on button with retry, others unaffected
+- CDS download failure → same pattern
+- Load More failure → loaded transcripts remain, retry shown
+- NR_/XR_ transcript accidentally showing CDS button → must NOT happen
+- MANE badge appearing for non-human gene → must NOT happen
+
+Fix every bug found before writing the report.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+If any bug is found:
+1. Explain root cause
+2. Fix immediately
+3. Re-run the affected test
+4. Continue only after passing
+Do not leave known bugs unresolved.
+
+--------------------------------------------------
+
+STOP AFTER STEP 5
+
+Do NOT continue to UI polish, regression testing, or readiness checklist.
+Those are Part 2.
+
+Write PHASE-5.3C-PART1-REPORT.md with:
+- Which steps are fully complete
+- Bugs found and fixed (file, description, fix)
+- Bugs found but not fixed (if any — explain why)
+- Entrez audit results (Scenarios A-D call counts)
+- Protein linkage status (exact proteinAccession values for 3 TP53
+  NM_ transcripts — populated or TODO)
+- Exact next step for Part 2
+
+Commit only if TypeScript passes. Do not commit broken code.
