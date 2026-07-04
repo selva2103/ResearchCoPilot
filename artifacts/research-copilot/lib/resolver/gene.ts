@@ -7,8 +7,14 @@
  *   exact symbol match (name == query, case-insensitive).
  *
  * Resolution strategy:
+ *   0. Organism-prefix path (new — FIX 2): when detectedOrganism is provided
+ *      by the caller (from lib/resolver/organism-prefix.ts pre-step):
+ *      → ESearch {q}[sym] AND {taxId}[Taxonomy ID]
+ *      → HIGH confidence (0.92) if a matching result is found
+ *      → Falls through to steps 1/2 if no organism-specific result
  *   1. ESearch db=gene, term="{query}[sym] AND Homo sapiens[orgn]"
  *      → confirmed human gene → HIGH confidence (0.92)
+ *      (Skipped when detectedOrganism is a non-human organism)
  *   2. If no human hit: ESearch without organism filter
  *      a. Single organism result → MEDIUM confidence (0.85)
  *      b. Multiple organisms → MEDIUM confidence (0.80), ambiguityDetected=true
@@ -90,6 +96,12 @@ function exactSymbolMatch(entry: GeneESummaryEntry, query: string): boolean {
   return entry.name.toUpperCase() === query.toUpperCase();
 }
 
+function buildAliases(entry: GeneESummaryEntry): string[] {
+  return entry.otheraliases
+    ? entry.otheraliases.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+}
+
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
 /**
@@ -97,13 +109,85 @@ function exactSymbolMatch(entry: GeneESummaryEntry, query: string): boolean {
  *
  * Returns null if the query does not match GENE_SYMBOL_RE or if NCBI Gene
  * returns no matching results. The caller falls through to organism/disease.
+ *
+ * @param query            Gene symbol to search (may be mixed-case when
+ *                         detectedOrganism is supplied from the pre-step).
+ * @param detectedOrganism When set (from lib/resolver/organism-prefix.ts pre-step),
+ *                         search this organism first via taxId-filtered ESearch
+ *                         (FIX 2 — Organism-Aware Gene Ranking Patch).
+ *                         Also bypasses the uppercase-only GENE_SYMBOL_RE guard so
+ *                         mixed-case symbols like "Trp53" or "Sox2" are accepted.
  */
 export async function resolveGene(
-  query: string
+  query: string,
+  detectedOrganism?: { taxId: number; name: string }
 ): Promise<Omit<QueryResolution, "originalQuery"> | null> {
-  if (!GENE_SYMBOL_RE.test(query.trim())) return null;
+  // When called from the organism-prefix pre-step, bypass the uppercase-only
+  // symbol guard — non-human gene symbols are often mixed-case (Trp53, Sox2).
+  // When called from the normal pipeline, the uppercase-only guard still applies.
+  if (!detectedOrganism && !GENE_SYMBOL_RE.test(query.trim())) return null;
 
   const q = query.trim().toUpperCase();
+
+  // ── Step 0: Organism-specific path (FIX 2) ────────────────────────────────
+  // Only runs when the caller detected an organism prefix (e.g. "mouse CD4").
+  // Uses NCBI's documented taxId filter: {symbol}[sym] AND {taxId}[Taxonomy ID]
+  // (verified 2026-07-03: both CD4[sym] AND 10090[Taxonomy ID] and Mus musculus[orgn]
+  // return Gene ID 12504 — taxId form preferred as it is exact and language-independent).
+  if (detectedOrganism) {
+    const { count: orgCount, ids: orgIds } = await geneESearch(
+      `${q}[sym] AND ${detectedOrganism.taxId}[Taxonomy ID]`
+    );
+
+    if (orgCount > 0 && orgIds.length > 0) {
+      await sleep(RESOLVER_RATE_DELAY_MS);
+      const entries = await geneESummary(orgIds);
+
+      // Prefer exact symbol match; fall back to first result from the correct organism
+      const exact = entries.find((e) => exactSymbolMatch(e, q));
+      const orgMatch = entries.find(
+        (e) => e.organism.taxid === detectedOrganism.taxId
+      );
+      const best = exact ?? orgMatch ?? entries[0];
+
+      if (best) {
+        const aliases = buildAliases(best);
+        return {
+          normalizedQuery: best.name,
+          queryType: "Gene",
+          confidence: 0.92, // HIGH — both organism and gene symbol confirmed
+          confidenceTier: toConfidenceTier(0.92),
+          matchedProvider: "ncbi-gene",
+          primaryIdentifier: best.uid,
+          identifierScheme: "ncbi-gene",
+          scientificName: best.description,
+          organism: best.organism.scientificname,
+          taxonomyId: String(best.organism.taxid),
+          synonyms: aliases,
+          synonymSource: aliases.length > 0 ? "ncbi-gene" : undefined,
+          relationships: {
+            organisms: [best.organism.scientificname],
+          },
+          resolutionPath: "ncbi-gene-organism-prefix",
+          ambiguityDetected: false,
+          selectedMatch: {
+            identifier: best.uid,
+            displayName: best.name,
+            organism: best.organism.scientificname,
+            queryType: "Gene",
+            confidence: 0.92,
+          },
+        };
+      }
+    }
+
+    // Organism-filtered search found nothing.
+    // Return null so the caller (resolver/index.ts pre-step) falls through to the
+    // normal synonym-normalization + gene + organism + disease pipeline.
+    // Do NOT fall back to a broad cross-organism search here — that would resolve a
+    // species-qualified query (e.g. "mouse XYZ") to the wrong organism's gene.
+    return null;
+  }
 
   // ── Step 1: Search in Homo sapiens (most common intent) ─────────────────
   const { count: humanCount, ids: humanIds } = await geneESearch(
@@ -117,10 +201,7 @@ export async function resolveGene(
     const best = exact ?? entries[0];
 
     if (best) {
-      const aliases = best.otheraliases
-        ? best.otheraliases.split(",").map((s) => s.trim()).filter(Boolean)
-        : [];
-
+      const aliases = buildAliases(best);
       return {
         normalizedQuery: best.name,
         queryType: "Gene",
@@ -179,9 +260,7 @@ export async function resolveGene(
   const confidence = isAmbiguous ? 0.80 : 0.85;
   const best = results[0];
 
-  const aliases = best.otheraliases
-    ? best.otheraliases.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
+  const aliases = buildAliases(best);
 
   return {
     normalizedQuery: best.name,

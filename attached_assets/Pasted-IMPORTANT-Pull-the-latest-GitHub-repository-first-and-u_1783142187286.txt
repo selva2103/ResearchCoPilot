@@ -1,0 +1,251 @@
+IMPORTANT: Pull the latest GitHub repository first and use the current repository state as the source of truth. Do not recreate or overwrite any existing implementation from previous phases. Inspect the current implementation before making changes.
+
+PROJECT CONTEXT — READ FIRST
+
+You are continuing work on ResearchCoPilot, a bioinformatics research 
+platform built with Next.js 15 + TypeScript frontend and Python FastAPI 
+backend.
+
+The repository has already been updated to the latest GitHub commit. 
+Pull the latest code before starting.
+
+--------------------------------------------------
+
+COMPLETED PHASES
+
+Completed and validated:
+- PubMed Explorer
+- GEO Explorer
+- Universal Pagination Framework
+- Sequence Foundation (Phase 5.1)
+- Biological Query Resolver (Phase 5.1.5)
+- Gene Explorer (Phase 5.2)
+- Transcript Explorer Foundation (Phase 5.3A)
+- Transcript Explorer Interactive Features (Phase 5.3B Part 1)
+
+Do NOT rebuild or redesign any completed module.
+
+--------------------------------------------------
+
+BEFORE WRITING ANY CODE
+
+Read ONLY these files — nothing else:
+- lib/transcript/fetch.ts
+- lib/transcript/parser.ts
+- lib/transcript/index.ts
+- types/transcript-record.ts
+- GeneRecord type file
+- app/api/analyze/route.ts
+- app/api/transcript/download/route.ts
+- Transcript Explorer UI component
+
+Do NOT inspect PubMed, GEO, Resolver, Sequence Foundation, or Python 
+FastAPI files. Do not re-read the NCBI API documentation — the API 
+structure is already handled in the existing implementation.
+
+--------------------------------------------------
+
+CURRENT STATE — ALREADY IMPLEMENTED AND WORKING
+
+The following is complete. Do NOT redesign or replace any of it.
+Fix only bugs discovered during implementation of remaining work.
+
+Transcript Explorer (5.3A + 5.3B Part 1):
+- Transcript list display
+- Transcript accordion (expand/collapse)
+- FASTA download (lazy, rate-limited)
+- CDS download (lazy, rate-limited)
+- Download API route
+- Rate-limited download queue
+- Retry states on failure
+- Non-coding transcript label for NR_/XR_
+- MANE badges (human only — not shown for non-human genes)
+- TypeScript passing
+- GitHub checkpoint completed
+
+NOT YET BUILT (scope of this session):
+- Transcript summaries in expanded panel
+- Pagination (Load More) for transcript list
+- Lazy loading enforcement
+- Full validation suite
+- End state documentation for Phase 5.3C
+
+--------------------------------------------------
+
+REMAINING WORK — IMPLEMENT ONLY THESE
+
+STEP 1 — Transcript Summaries
+
+Display transcript-level summaries in the expanded panel where available.
+Source: RefSeq Summary comment from the NCBI Gene response — check 
+whether this is already present in the fetched data before making any 
+additional API call. If it requires an additional call, load it lazily 
+on expand (see Step 3), never on page load.
+
+If no transcript-level summary exists for a transcript:
+- Do NOT display an empty card or section
+- Do NOT display "No summary available"
+- Simply omit the summary section for that transcript
+
+This is transcript-level only — never duplicate or replace the 
+gene-level summary already shown in the Gene Explorer card above.
+
+--------------------------------------------------
+
+STEP 2 — Transcript Pagination
+
+Apply the Universal Exploration Framework (the same Load More pattern 
+already used by PubMed and GEO) to the transcript list.
+
+- Default page size: 10 transcripts
+- When a gene has more than 10 transcripts (e.g. TTN): show first 10, 
+  Load More button below
+- On click: append next page to existing list — do NOT replace
+- Ordering must be preserved across all pages:
+  1. MANE Select transcript first
+  2. Curated (NM_, NR_) before predicted (XM_, XR_)
+  3. transcriptLength descending within each group
+- When all transcripts are loaded: disable Load More, display 
+  "All transcripts loaded" (not "end of results" — that wording is 
+  for database exhaustion, not a local list)
+- Load More button must be disabled while a fetch is in progress — 
+  rapid clicking must not fire overlapping requests
+
+Do not invent a new pagination system. Reuse the existing framework.
+
+--------------------------------------------------
+
+STEP 3 — Lazy Loading
+
+On initial page load: only the transcript list should be fetched. 
+Zero additional Entrez calls should be made beyond what 5.3A already 
+makes for the transcript list itself.
+
+Anything requiring additional NCBI requests must load lazily:
+- Summary text (if not in existing response) → on expand
+- Any detail fields not already in TranscriptRecord → on expand
+- FASTA sequence → on Download FASTA click (already implemented)
+- CDS → on Download CDS click (already implemented)
+
+If summary text and genomic coordinates are already present in the 
+existing fetched response, use them directly on expand with no extra call.
+
+Document in the final report: the exact sequence and count of every 
+Entrez call made for a full TP53 session covering page load, one expand, 
+one FASTA download, one CDS download, and one Load More click.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any bug, TypeScript error, integration issue, UI regression, or 
+incorrect behavior is discovered during implementation or validation:
+1. Explain the root cause
+2. Fix it immediately
+3. Re-run affected tests
+4. Continue only after the issue passes
+
+Do not leave known bugs unresolved in the final report.
+
+--------------------------------------------------
+
+STEP 4 — Full Validation Suite
+
+Run all tests and report actual values — never "works" as a response.
+
+TP53 (human):
+- Total transcript count
+- Exact MANE Select accession (show value e.g. NM_000546.6)
+- Expand one NM_ transcript — list all visible fields in expanded view
+- Show transcript summary text if available (first sentence)
+- Download FASTA — show first 2 lines of file content, confirm filename
+- Download CDS — confirm filename
+- Confirm NR_ transcripts show "Non-coding transcript", no CDS button
+- If >10 transcripts: confirm Load More appends correctly, show count 
+  before and after
+
+BRCA1 (human):
+- Total transcript count
+- MANE Select accession (show value)
+- Confirm pagination works if >10 transcripts
+
+TTN (human — very large transcript count):
+- Confirm initial load shows exactly 10 transcripts
+- Click Load More — confirm next page appends (show counts before/after)
+- Confirm no duplicates
+- Confirm ordering preserved across pages
+
+Mouse Trp53 (non-human):
+- Total transcript count
+- Confirm no MANE Select badge anywhere in UI
+- Confirm isCanonical is null for all records (not false)
+- Confirm FASTA download works for non-human transcript
+
+SARS-CoV-2 (non-gene query):
+- Confirm Transcript Explorer section does NOT appear
+
+Rapid-click Load More (TTN):
+- Click 3 times quickly
+- Confirm only one request fires at a time
+
+Rapid-click Download FASTA (TP53):
+- Trigger on two different transcripts quickly
+- Confirm rate limiter governs both, no concurrent unthrottled requests
+
+--------------------------------------------------
+
+STEP 5 — Regression Testing
+
+With actual values — not claims:
+- Gene Explorer: search TP53 — show Gene ID, chromosome, HGNC ID
+- PubMed: search "TP53" — show paper count
+- GEO: search "TP53" — show dataset count
+- Sequence Foundation: search "SARS-CoV-2" — show primary accession
+- Transcript Explorer: confirm 5.3A and 5.3B-Part1 features still work 
+  (expand/collapse, FASTA download, CDS download, non-coding label, 
+  MANE badge for human, no badge for mouse)
+- Universal pagination: Load More still works for PubMed and GEO results
+- No TypeScript errors, no Python changes, no AI changes
+
+--------------------------------------------------
+
+STEP 6 — End State Documentation (handoff to Phase 5.3C)
+
+Write this as if the reader has never seen this conversation:
+1. Complete file structure — all paths created or modified across 
+   5.3A, 5.3B-Part1, and this session
+2. TranscriptRecord interface final state — all field names and types
+3. GeneRecord.transcripts final structure
+4. Entrez call map: every user action and Entrez calls it triggers, 
+   with counts (per the full TP53 session in Step 3)
+5. Pagination implementation — where page state lives, ordering strategy
+6. Lazy loading map — what loads eagerly vs lazily and when
+7. proteinAccession field status — populated or null with Phase 5.4 TODO
+8. "View Sequence" stub status — location in code, what needs to wire it
+9. Known limitations relevant to Phase 5.3C or Phase 5.4
+
+--------------------------------------------------
+
+STEP 7 — Final Report
+
+Report:
+- Files modified in this session
+- Architecture changes from 5.3B-Part1
+- Transcript summary source and fetch strategy
+- Lazy loading implementation
+- Pagination implementation
+- Validation results per Step 4 (all queries, all actual values)
+- Regression results per Step 5 (with evidence)
+- Entrez call count map per Step 3
+- Complete end state documentation per Step 6
+
+Confirm: no regressions, no Phase 5.3C or 5.4 scope implemented, 
+no Python changes, no AI changes, app fully stable and runnable.
+
+--------------------------------------------------
+
+STOP
+
+After completing Steps 1–7 above:
+Do NOT begin Phase 5.3C.
+Write the final report and stop.

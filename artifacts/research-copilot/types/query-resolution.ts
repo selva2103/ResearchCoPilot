@@ -265,6 +265,33 @@ export interface QueryResolution {
    * Used to flag known limitations, e.g. hardcoded synonym fallback.
    */
   notes?: string;
+
+  // ── Organism-prefix context (FIX 5 — Organism-Aware Gene Ranking Patch) ───
+  /**
+   * NCBI Taxonomy ID of the organism detected from a species-qualified prefix
+   * in the original query (e.g. "mouse CD4" → 10090).
+   *
+   * Set only when an organism prefix was detected and a matching gene was found.
+   * null for all other query types.
+   *
+   * Downstream modules (Gene Explorer, Transcript Explorer, Protein Explorer)
+   * must use this field — not re-parse the original query — to obtain organism
+   * context (FIX 6 architecture contract).
+   */
+  detectedOrganismTaxId?: number | null;
+
+  /**
+   * NCBI scientific name of the organism detected from the prefix
+   * (e.g. "Mus musculus"). Paired with detectedOrganismTaxId.
+   */
+  detectedOrganismName?: string | null;
+
+  /**
+   * The gene symbol / query remainder after stripping the organism prefix.
+   * Example: "mouse CD4" → "CD4"; "rat EGFR" → "EGFR".
+   * null when no organism prefix was detected.
+   */
+  strippedGeneQuery?: string | null;
 }
 
 // ─── Convenience helpers ──────────────────────────────────────────────────────

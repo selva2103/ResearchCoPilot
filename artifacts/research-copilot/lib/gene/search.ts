@@ -144,6 +144,20 @@ export function broadGeneSearchTerm(symbol: string): string {
 }
 
 /**
+ * Build an ESearch term for a gene symbol search filtered by NCBI Taxonomy ID.
+ *
+ * Uses NCBI's documented [Taxonomy ID] field tag (verified 2026-07-03:
+ * "CD4[sym] AND 10090[Taxonomy ID]" returns Gene ID 12504 — Mus musculus CD4).
+ * Preferred over [Organism]/[orgn] because it is exact, language-independent,
+ * and avoids false matches on organism common names in gene descriptions.
+ *
+ * Used when the resolver pre-step detected an organism prefix (FIX 2).
+ */
+export function taxIdGeneSearchTerm(symbol: string, taxId: number): string {
+  return `${symbol.toUpperCase()}[sym] AND ${taxId}[Taxonomy ID]`;
+}
+
+/**
  * Build an ESearch term for a free-text query (disease+gene combos, multi-word queries).
  * Used as fallback when the query doesn't match the gene symbol pattern.
  */

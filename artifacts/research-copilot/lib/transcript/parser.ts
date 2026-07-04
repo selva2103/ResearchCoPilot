@@ -80,15 +80,20 @@ export function parseGeneTable(
   // Collect parsed entries in a Map to deduplicate by accessionVersion
   const seen = new Map<string, TranscriptRecord>();
 
-  // Determine MANE Select accession (first NM_ in the list, if any)
-  const maneSelectAccVer =
-    isHuman && maneInfo && maneInfo.maneSelectAccessions.length > 0
-      ? maneInfo.maneSelectAccessions[0]
-      : null;
-
   // Build sets for O(1) lookup
   const maneSelectSet = new Set(maneInfo?.maneSelectAccessions ?? []);
   const manePlusSet = new Set(maneInfo?.manePlusClinicalAccessions ?? []);
+
+  // Initial MANE Select accession estimate — used as a starting value only.
+  // May be inaccurate when NCBI's "MANE Select[Keyword]" ESearch returns spurious
+  // nuccore UIDs (confirmed for TP53 Gene ID 7157: NM_005940.5 appears in the
+  // ESearch result even though it is not a TP53 transcript). The post-processing
+  // step at the end of this function corrects the value using authoritative
+  // record-level isCanonical data whenever exactly one canonical transcript is found.
+  const maneSelectAccVer: string | null =
+    isHuman && maneInfo && maneInfo.maneSelectAccessions.length > 0
+      ? maneInfo.maneSelectAccessions[0]
+      : null;
 
   for (let i = 0; i < lines.length; i++) {
     const match = TRANSCRIPT_LINE_RE.exec(lines[i].trim());
@@ -168,5 +173,37 @@ export function parseGeneTable(
     seen.set(accessionVersion, record);
   }
 
-  return Array.from(seen.values());
+  const records = Array.from(seen.values());
+
+  // ── Post-process: correct maneSelectAccession using authoritative isCanonical data ──
+  //
+  // maneSelectAccVer (from maneSelectAccessions[0]) can be wrong when NCBI's
+  // "MANE Select[Keyword]" ESearch returns spurious UIDs. Confirmed for TP53:
+  // the ESearch returns a UID for NM_005940.5 (not a TP53 transcript) — it never
+  // enters the gene_table and therefore never becomes a parsed record, but it
+  // pollutes maneSelectAccessions and can push the correct NM_000546.6 to [1].
+  //
+  // Strategy: after all records are parsed with isCanonical assigned via
+  // maneSelectSet.has(), find the unique canonical record (isCanonical=true).
+  // If exactly ONE such record exists, use its accessionVersion as the definitive
+  // maneSelectAccession on ALL records. This is safe because:
+  //   - Only records from the gene_table can reach this point.
+  //   - Spurious ESearch UIDs for other genes never appear in the gene_table.
+  //   - If 0 canonical records: MANE Select not found in gene_table; leave as-is.
+  //   - If >1 canonical records: genuinely ambiguous (NCBI data issue beyond this
+  //     gene); leave as-is rather than arbitrarily overwriting.
+  if (isHuman && maneInfo !== null) {
+    const canonicalRecords = records.filter((r) => r.isCanonical === true);
+    if (canonicalRecords.length === 1) {
+      const correctAccVer = canonicalRecords[0].accessionVersion;
+      if (correctAccVer !== maneSelectAccVer) {
+        // Mutate each record — plain objects created in this function, safe to mutate.
+        for (const r of records) {
+          (r as { maneSelectAccession: string | null }).maneSelectAccession = correctAccVer;
+        }
+      }
+    }
+  }
+
+  return records;
 }

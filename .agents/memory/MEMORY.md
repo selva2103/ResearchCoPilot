@@ -2,3 +2,5 @@
 - [MedGen ESummary API quirks](medgen-api-quirks.md) — semantictype is { value: string } not string; broad disease queries return subtypes first, not canonical concept.
 - [Disease resolver normalizedQuery strategy](resolver-disease-normalization.md) — partial matches use originalQuery as normalizedQuery, not the MedGen subtype title.
 - [Transcript Summary API](transcript-summary-api.md) — nuccore ESummary has no `comment` field; use EFetch rettype=gb and parse "Transcript Variant:" paragraph from COMMENT section.
+- [MANE Select ESearch quirk](mane-select-esearch-quirk.md) — "MANE Select[Keyword]" ESearch can return spurious UIDs for other genes (confirmed TP53: NM_005940.5 appears in result). Fix: post-process parsed records to find unique isCanonical=True and use its accessionVersion as maneSelectAccession on all records.
+- [Organism-aware gene ranking](organism-gene-ranking.md) — species-qualified queries (e.g. "mouse CD4") need organism-prefix pre-step before main resolver; taxId ESearch field tag is [Taxonomy ID]; fallback on miss must return null (not broad search).

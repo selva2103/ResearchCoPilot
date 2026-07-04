@@ -1,0 +1,214 @@
+ORGANISM-AWARE GENE RANKING PATCH
+
+IMPORTANT: THIS IS A TARGETED BUG FIX ONLY.
+Do not implement new features. Do not start Phase 5.3C or 5.4.
+Do not modify PubMed, GEO, Sequence Foundation, Transcript Explorer,
+Python FastAPI, Redis, or AI sections.
+
+--------------------------------------------------
+
+BEFORE WRITING ANY CODE
+
+Read ONLY these files:
+- The Biological Query Resolver (Phase 5.1.5) — query classification,
+  organism detection, and gene resolution logic
+- The Gene Explorer module (Phase 5.2) — search.ts, parser.ts, index.ts
+- app/api/analyze/route.ts — only the gene resolution path
+
+Do not read any other module.
+
+--------------------------------------------------
+
+THE BUG
+
+When a user searches a species-qualified query like:
+  "mouse CD4", "mouse Trp53", "rat EGFR", "zebrafish Sox2"
+
+The Gene Explorer currently returns the wrong organism's gene as the
+primary result. Example: "mouse CD4" returns Rhea americana (or similar)
+instead of Mus musculus CD4.
+
+Root cause: The gene ranking step does not use the organism context
+detected by the Query Resolver when sorting NCBI Gene ESearch results.
+NCBI ESearch for db=gene returns results in its own relevance order,
+which does not prioritize the organism the user specified. When the
+resolver correctly identifies "mouse" as Mus musculus, that information
+is not being passed to — or not being used by — the gene ranking step.
+
+--------------------------------------------------
+
+WHAT TO FIX
+
+FIX 1 — Organism extraction from query
+
+The resolver must reliably extract organism context from species-qualified
+queries. Support at minimum these common prefixes and their NCBI Taxonomy
+IDs:
+
+  "mouse" / "murine"     → Mus musculus        (taxId: 10090)
+  "rat"                  → Rattus norvegicus    (taxId: 10116)
+  "zebrafish"            → Danio rerio          (taxId: 7955)
+  "human" / "homo"       → Homo sapiens         (taxId: 9606)
+  "fly" / "drosophila"   → Drosophila melanogaster (taxId: 7227)
+  "worm" / "C. elegans"  → Caenorhabditis elegans (taxId: 6239)
+  "yeast"                → Saccharomyces cerevisiae (taxId: 4932)
+  "arabidopsis"          → Arabidopsis thaliana (taxId: 3702)
+  "chicken"              → Gallus gallus         (taxId: 9031)
+
+When an organism prefix is detected:
+- Strip the organism prefix from the gene symbol before searching
+  (e.g. "mouse CD4" → search for "CD4" with taxId filter 10090)
+- Store the detected taxId in QueryResolution for downstream use
+- Set confidence to HIGH (≥ 0.90) when both organism AND gene symbol
+  are cleanly extracted
+
+If no organism prefix is detected, behavior is unchanged from current.
+
+FIX 2 — Pass organism context to NCBI Gene ESearch
+
+When a taxId is available in QueryResolution, add it as a filter to the
+NCBI Gene ESearch query:
+
+  Instead of: esearch.fcgi?db=gene&term=CD4
+  Use:        esearch.fcgi?db=gene&term=CD4[Gene Name]+AND+10090[Taxonomy ID]
+
+This is NCBI's documented approach for organism-filtered gene searches.
+Verify the exact field tag ([Taxonomy ID] vs [taxid]) against the actual
+NCBI ESearch documentation or a live test query before implementing —
+do not guess at the field name.
+
+FIX 3 — Result ranking when multiple organisms are returned
+
+Even with a taxId filter, ESearch may return results from multiple
+organisms (due to NCBI's own ranking). Add a post-search ranking step:
+
+Priority order for returned gene records:
+  1. Exact taxId match to the requested organism
+  2. Same genus (first word of scientific name matches)
+  3. All other organisms
+
+Within each priority tier, rank by:
+  - "Reference" or "Representative" genome status first
+  - Reviewed/Validated RefSeq status
+  - Result position from NCBI (as tiebreaker)
+
+The top result shown to the user must always be from the requested
+organism when one was specified and a match exists in the results.
+
+FIX 4 — Unqualified gene symbol queries (no organism prefix)
+
+For queries without an organism prefix (e.g. plain "TP53", "EGFR"):
+- Current behavior: return all organisms, Homo sapiens often ranked first
+  by NCBI — this is acceptable and should be preserved
+- Do NOT change this behavior
+- Do NOT default unqualified queries to human — some users searching
+  "TP53" may want non-human results and the multi-organism list serves them
+
+FIX 5 — QueryResolution interface update
+
+Add to QueryResolution (types/query-resolution.ts or equivalent):
+- detectedOrganismTaxId: number | null
+- detectedOrganismName: string | null  (e.g. "Mus musculus")
+- strippedGeneQuery: string | null     (gene symbol after organism removal)
+
+These fields allow downstream modules (Gene Explorer, and later Protein
+Explorer) to use organism context without re-parsing the original query.
+
+FIX 6 — Preserve organism context through the pipeline
+
+When detectedOrganismTaxId is present, propagate it through the entire gene search pipeline:
+
+QueryResolution → Gene Explorer → Gene search → Gene ranking
+
+The detected organism context must remain attached to the request and be reused by downstream modules. Do not re-parse the original user query inside Gene Explorer or any downstream module.
+
+All downstream ranking decisions must use the propagated detectedOrganismTaxId and detectedOrganismName from QueryResolution rather than attempting to infer the organism again.
+
+This propagated organism context will also become the canonical source for Transcript Explorer, Protein Explorer (Phase 5.4), and future organism-aware modules.
+
+--------------------------------------------------
+
+VERIFICATION — BRCA1 TRANSCRIPT COUNT
+
+BRCA1 currently shows 368 transcripts. Before fixing gene ranking,
+verify this count against raw NCBI:
+
+Run: esearch.fcgi?db=gene&term=672[Gene ID] then elink to nuccore or
+use the Gene page directly at https://www.ncbi.nlm.nih.gov/gene/672
+
+Check: does NCBI report ~368 RefSeq transcripts for BRCA1 (including
+predicted NM_, NR_, XM_, XR_)? If yes, the count is correct and no
+fix is needed — document this in the report. If no, identify which
+step is overcounting and fix the parser.
+
+Report the raw NCBI count alongside the app's count in the final report.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any additional bug is discovered during implementation or validation:
+1. Explain the root cause
+2. Fix it immediately
+3. Re-run affected tests
+4. Continue only after the issue passes
+Do not leave known bugs unresolved.
+
+--------------------------------------------------
+
+VALIDATION
+
+Test all of these queries and report actual top result (organism + gene
+symbol + Gene ID) — do not report "works":
+
+Species-qualified queries (primary fix targets):
+- "mouse CD4"       → must return Mus musculus CD4, not any other species
+- "mouse Trp53"     → must return Mus musculus Trp53
+- "rat EGFR"        → must return Rattus norvegicus Egfr
+- "zebrafish Sox2"  → must return Danio rerio sox2
+
+Unqualified queries (must be unchanged):
+- "TP53"    → multi-organism list, Homo sapiens typically first — show top 3
+- "EGFR"    → same pattern — show top 3
+- "CD4"     → same — show top 3
+
+Edge cases:
+- "human TP53"     → must return Homo sapiens TP53 (not break on "human" prefix)
+- "mouse"          → no gene symbol, should not crash — show graceful empty or
+                     Unknown classification
+- "BRCA1"          → Homo sapiens, count and MANE Select accession unchanged
+                     from before this patch
+
+For each query show: detected organism (or null), strippedGeneQuery (or
+null), top result organism, top result Gene ID, top result symbol.
+
+--------------------------------------------------
+
+REGRESSION TESTING
+
+With actual values:
+- Gene Explorer: "TP53" — Gene ID and chromosome unchanged
+- Gene Explorer: "BRCA1" — Gene ID and MANE Select accession unchanged
+- Transcript Explorer: "TP53" — transcript count unchanged
+- PubMed: "TP53" — paper count unchanged
+- GEO: "breast cancer" — dataset count unchanged
+- No TypeScript errors, no Python changes, no AI changes
+
+--------------------------------------------------
+
+FINAL REPORT
+
+Report:
+- Root cause of the organism ranking bug (confirmed after reading resolver)
+- Files modified
+- Organism prefix detection logic implemented (list of supported prefixes)
+- NCBI ESearch filter syntax used (exact field tag verified)
+- Post-search ranking algorithm implemented
+- BRCA1 transcript count verification result (raw NCBI count vs app count)
+- Validation results per query above (all actual values)
+- Regression results (all actual values)
+- Any organism prefixes NOT yet supported (document as known limitation)
+- Known limitations relevant to Phase 5.3C or 5.4
+
+Confirm: no regressions, no new features added, no Phase 5.3C or 5.4
+scope implemented, app fully stable and runnable after this patch.

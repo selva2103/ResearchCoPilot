@@ -49,6 +49,7 @@ import { classifyAccession } from "@/lib/resolver/accession";
 import { resolveGene } from "@/lib/resolver/gene";
 import { resolveOrganism } from "@/lib/resolver/organism";
 import { resolveDisease } from "@/lib/resolver/disease";
+import { detectOrganismPrefix } from "@/lib/resolver/organism-prefix";
 import type { QueryResolution } from "@/types/query-resolution";
 import { unknownResolution } from "@/types/query-resolution";
 
@@ -82,6 +83,39 @@ export async function resolveQuery(query: string): Promise<QueryResolution> {
 // ─── Internal pipeline ────────────────────────────────────────────────────────
 
 async function _resolveQuery(query: string): Promise<QueryResolution> {
+  // ── Pre-step: Organism prefix detection (FIX 1–3 — Organism-Aware Gene Ranking Patch) ──
+  // Must run BEFORE synonym normalization so that species-qualified gene queries like
+  // "mouse CD4", "rat EGFR", "zebrafish Sox2" are handled correctly.
+  //
+  // When a prefix is detected:
+  //   1. The gene symbol (stripped query) is resolved with a taxId-filtered ESearch
+  //   2. The detectedOrganismTaxId/Name/strippedGeneQuery fields are set in the result
+  //   3. The resolver returns HIGH confidence (0.92) if a matching gene is found
+  //   4. Downstream modules (Gene Explorer, Transcript Explorer) use the propagated
+  //      organism context — they MUST NOT re-parse the original query (FIX 6)
+  //
+  // When no prefix is detected OR the stripped query does not resolve to a gene:
+  //   → Fall through to the normal synonym-normalization + accession + gene + organism
+  //     + disease pipeline (unchanged behaviour for all other queries).
+  const orgPrefix = detectOrganismPrefix(query);
+  if (orgPrefix) {
+    const prefixGeneResult = await resolveGene(orgPrefix.strippedQuery, {
+      taxId: orgPrefix.taxId,
+      name: orgPrefix.name,
+    });
+    if (prefixGeneResult && prefixGeneResult.confidence >= 0.60) {
+      return {
+        originalQuery: query,
+        ...prefixGeneResult,
+        detectedOrganismTaxId: orgPrefix.taxId,
+        detectedOrganismName: orgPrefix.name,
+        strippedGeneQuery: orgPrefix.strippedQuery,
+      };
+    }
+    // Gene not found for this organism prefix — fall through to normal pipeline.
+    // Use the full original query so the organism resolver can still match "mouse" etc.
+  }
+
   // ── Step 0: Synonym normalization (Step 10) ───────────────────────────────
   // Apply the hardcoded synonym table first. API-based synonym data from MeSH,
   // MedGen, and NCBI Taxonomy is collected within the individual resolvers.

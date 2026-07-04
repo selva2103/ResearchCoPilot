@@ -346,8 +346,18 @@ async function resolveBySymbol(
     });
   }
 
-  // Step 4: Sort — resolver-matched organism first (if any)
-  const sorted = sortByResolverContext(entries, resolverTaxId, resolverOrganism);
+  // Step 4: Sort — resolver-matched organism first (FIX 3)
+  const detectedTaxId = resolution?.detectedOrganismTaxId ?? null;
+  const detectedGenus = resolution?.detectedOrganismName
+    ? resolution.detectedOrganismName.split(" ")[0]
+    : null;
+  const sorted = sortByResolverContext(
+    entries,
+    resolverTaxId,
+    resolverOrganism,
+    detectedTaxId,
+    detectedGenus
+  );
 
   // Step 5: Path B — eager ELink for primary result only; lazy for the rest
   const primaryEntry = sorted[0];
@@ -508,29 +518,57 @@ async function resolveByFreeText(
 
 /**
  * Sort ESummary entries so the resolver-matched organism appears first.
- * If no organism context: preserve NCBI's default relevance order.
+ *
+ * Priority order (FIX 3 — Organism-Aware Gene Ranking Patch):
+ *   Tier 1: Exact taxId match to the requested organism
+ *   Tier 2: Same genus (first word of scientific name matches)
+ *   Tier 3: All other organisms
+ *
+ * Within each tier: preserve NCBI's original relevance order (stable sort).
+ *
+ * If no organism context: preserve NCBI's default relevance order unchanged.
+ *
+ * @param entries          ESummary entries to sort.
+ * @param resolverTaxId    taxId from resolution.taxonomyId (non-human single gene).
+ * @param resolverOrganism organism from resolution.organism (display name).
+ * @param detectedTaxId    taxId from resolution.detectedOrganismTaxId (species-prefix path).
+ * @param detectedGenus    First word of resolution.detectedOrganismName (for genus matching).
  */
 function sortByResolverContext(
   entries: RawGeneESummaryEntry[],
   resolverTaxId: string | undefined,
-  resolverOrganism: string | undefined
+  resolverOrganism: string | undefined,
+  detectedTaxId?: number | null,
+  detectedGenus?: string | null
 ): RawGeneESummaryEntry[] {
-  if (!resolverTaxId && !resolverOrganism) return entries;
+  // Use detectedTaxId (from organism-prefix path) preferentially over resolverTaxId
+  const targetTaxId = detectedTaxId ? String(detectedTaxId) : resolverTaxId;
+  const targetGenus = detectedGenus ?? resolverOrganism?.split(" ")[0];
 
-  return [...entries].sort((a, b) => {
-    const aMatch =
-      (resolverTaxId && String(a.organism.taxid) === resolverTaxId) ||
-      (resolverOrganism &&
-        a.organism.scientificname.toLowerCase().includes(resolverOrganism.toLowerCase()));
-    const bMatch =
-      (resolverTaxId && String(b.organism.taxid) === resolverTaxId) ||
-      (resolverOrganism &&
-        b.organism.scientificname.toLowerCase().includes(resolverOrganism.toLowerCase()));
+  if (!targetTaxId && !resolverOrganism) return entries;
 
-    if (aMatch && !bMatch) return -1;
-    if (!aMatch && bMatch) return 1;
-    return 0;
-  });
+  function tier(e: RawGeneESummaryEntry): number {
+    // Tier 1: exact taxId match
+    if (targetTaxId && String(e.organism.taxid) === targetTaxId) return 1;
+    // Tier 2: same genus (first word of scientific name)
+    if (
+      targetGenus &&
+      e.organism.scientificname
+        .split(" ")[0]
+        .toLowerCase() === targetGenus.toLowerCase()
+    ) return 2;
+    // Tier 3: everything else (including resolverOrganism string match for backward compat)
+    if (
+      resolverOrganism &&
+      e.organism.scientificname
+        .toLowerCase()
+        .includes(resolverOrganism.toLowerCase())
+    ) return 2;
+    return 3;
+  }
+
+  // Stable sort: entries within the same tier keep their NCBI relevance order
+  return [...entries].sort((a, b) => tier(a) - tier(b));
 }
 
 export type { GeneRecord } from "@/types/gene-record";
