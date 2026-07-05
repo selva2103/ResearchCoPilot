@@ -1,0 +1,236 @@
+PROJECT CONTEXT — READ FIRST
+
+If all required verification passes without modification,
+do not rewrite files simply to match this prompt.
+
+Document the result and continue.
+
+This repository is already updated to the latest GitHub commit.
+Pull latest before starting.
+
+Completed phases (do NOT rebuild any of these):
+- PubMed Explorer
+- GEO Explorer
+- Universal Pagination
+- Sequence Foundation (5.1)
+- Biological Query Resolver (5.1.5)
+- Gene Explorer (5.2)
+- Transcript Explorer Foundation (5.3A)
+- Transcript Explorer Interactive Features (5.3B Part 1)
+- Transcript Explorer Completion (5.3B Part 2)
+- Organism-aware Gene Ranking Patch
+- Phase 5.3C Part 1 (Hardening and Verification — 95% complete)
+
+--------------------------------------------------
+
+FIRST ACTION — ESTABLISH CURRENT STATE
+
+Phase 5.3C Part 1 completed Steps 1-4 (chain verification, Entrez audit,
+MANE verification, protein linkage verification) but ran out of credits
+before writing PHASE-5.3C-PART1-REPORT.md. That file may be absent or
+incomplete.
+
+Do this before writing any code:
+
+1. Check whether PHASE-5.3C-PART1-REPORT.md exists in the repo root.
+
+2. If it exists and is complete: read it, trust it, use it as your
+   starting state. Skip to STEP 1 below.
+
+3. If it does not exist or is incomplete: read ONLY these files to
+   reconstruct the current state — do not re-run full verification,
+   just read what's there:
+   - lib/transcript/fetch.ts
+   - lib/transcript/parser.ts
+   - lib/transcript/index.ts
+   - types/transcript-record.ts
+   - GeneRecord type file
+   - app/api/analyze/route.ts
+   - Transcript Explorer UI component
+
+   Then write a brief PHASE-5.3C-PART1-REPORT.md yourself based on
+   what you observe in the files, covering: protein linkage status,
+   MANE Select field values, any bugs already fixed. This takes the
+   place of the missing report and ensures continuity.
+
+Do NOT re-run Steps 1-4 from Part 1. Do NOT re-audit Entrez calls.
+Do NOT re-verify MANE Select from scratch. Those are done.
+
+--------------------------------------------------
+
+IMPORTANT — DO NOT REBUILD COMPLETED WORK
+
+Before implementing any fix, verify whether the behavior is already
+correct in the current repository.
+
+If a step already passes, document it and do NOT rewrite the code.
+
+Only modify files when:
+- a real bug is confirmed,
+- a regression is found, or
+- hardening is specifically required for Phase 5.4.
+
+Do NOT modify: PubMed, GEO, Sequence Foundation, Query Resolver,
+Python FastAPI, Redis, AI sections.
+
+--------------------------------------------------
+
+READ ONLY THESE FILES (after establishing state above)
+
+- lib/transcript/ (all files)
+- types/transcript-record.ts
+- GeneRecord type file
+- app/api/analyze/route.ts
+- Transcript Explorer UI component
+
+Do not read unrelated modules unless a specific regression requires it.
+
+--------------------------------------------------
+
+STEP 1 — UI Consistency Check
+
+Verify visual consistency across the Transcript Explorer.
+Check each item — if it already passes, document it and move on.
+Only fix actual inconsistencies:
+
+- Transcript length always shows unit ("2591 nt" not "2591")
+- Null fields show "Not available" — no empty boxes or missing labels
+- FASTA/CDS buttons show loading state while fetching (not frozen)
+- Load More button disabled while fetch is in progress
+- Accordion expand/collapse is visually clear
+- Card style matches existing PubMed, GEO, Gene Explorer cards
+- "Non-coding transcript" label visible in NR_/XR_ expanded panels
+- MANE Select badge styled distinctly from status and prefix badges
+--------------------------------------------------
+
+STEP 2 — TARGETED REGRESSION TESTING
+
+The purpose of this step is to confirm that Phase 5.3C introduced no
+regressions in the modules it directly interacted with.
+
+IMPORTANT:
+Do NOT re-run the full validation suites for PubMed, GEO, Sequence
+Foundation, or unrelated modules unless a regression is actually
+observed during testing.
+
+Only verify the following modules by default:
+
+Transcript Explorer
+- "TP53" → transcript count: ___
+- MANE Select accession: ___
+- Expand one transcript
+- Confirm expand/collapse still works
+- Confirm FASTA download works (or document the exact failure if a real
+  bug is confirmed)
+- Confirm CDS download works (or document the exact failure if a real
+  bug is confirmed)
+- Confirm loading/error states behave correctly
+- Confirm MANE badge appears exactly once
+- Confirm NR_/XR_ transcripts show "Non-coding transcript"
+- TTN → confirm pagination still appends correctly
+
+Gene Explorer
+- "TP53" → Gene ID: ___, chromosome: ___
+- "BRCA1" → Gene ID: ___
+- "mouse Trp53" → top organism: ___, Gene ID: ___
+- Confirm Protein resource stub still displays correctly
+
+Protein Readiness
+- Confirm proteinAccession values remain intact
+- Confirm GeneRecord.availableResources.proteins was not altered
+- Confirm no regression in transcript → protein linkage
+
+TypeScript
+- Confirm zero TypeScript errors
+
+Python
+- Confirm no Python files modified
+
+AI Sections
+- Confirm no AI-generated sections modified
+
+Only if any regression is detected during the checks above, extend testing
+to the affected upstream module(s) (PubMed, GEO, Sequence Foundation,
+or Query Resolver) to identify the root cause. Otherwise, do NOT spend
+credits re-validating unrelated completed modules.
+
+--------------------------------------------------
+
+STEP 3 — Pre-5.4 Readiness Checklist
+
+Verify each item explicitly — yes or no, not assumed.
+If any item fails, fix it before marking the checklist complete.
+
+[ ] TranscriptRecord.proteinAccession field exists and is typed correctly
+[ ] NM_ transcripts: proteinAccession populated OR has exact TODO comment
+    "// TODO Phase 5.4: fetch protein accession via ELink db=gene→db=protein"
+    — no NM_ transcript lacks both
+[ ] XM_ transcripts: same requirement as NM_ above
+[ ] NR_/XR_ transcripts: proteinAccession is null, no TODO needed
+[ ] GeneRecord.transcripts.records typed as TranscriptRecord[] | null
+[ ] GeneRecord.availableResources.proteins stub intact:
+    available: true, count present or null (null is acceptable per 5.2 design)
+[ ] Proteins section visible in Gene Explorer UI card
+[ ] Proteins section NOT wired to any functionality yet
+[ ] Proteins section can be activated by Phase 5.4 with only a click
+    handler — no card layout change needed
+[ ] Entrez call count for full TP53 session documented
+[ ] All existing modules return correct results (per Step 2 evidence)
+[ ] MANE Select: human genes have exactly one canonical transcript
+[ ] Non-human genes: isCanonical null for all transcripts (not false)
+[ ] No MANE badge appears for non-human genes
+[ ] Rate limiter not bypassed by any transcript or download operation
+[ ] Every NM_/XM_ transcript has proteinAccession populated OR the
+    TODO comment — no protein-coding transcript lacks a Phase 5.4 path
+[ ] TypeScript passes with zero errors
+[ ] No Python files modified in 5.3C
+[ ] No AI sections modified in 5.3C
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any bug is found during Steps 1-3:
+1. Explain root cause
+2. Fix immediately
+3. Re-run affected test
+4. Continue only after passing
+Do not leave known bugs unresolved.
+
+--------------------------------------------------
+
+STEP 4 — Final Documentation
+
+Write PHASE-5.3C-FINAL-REPORT.md to the repository root.
+Write it as if the reader has never seen this conversation — this
+becomes the entry document for Phase 5.4.
+
+Include:
+1. Complete file structure — all paths created or modified across
+   5.3A, 5.3B-Part1, 5.3B-Part2, 5.3C-Part1, and this session
+2. Protein linkage status — exact proteinAccession values for 3 TP53
+   NM_ transcripts, and the retrieval strategy for Phase 5.4
+3. Entrez call map — every user action and which calls it triggers,
+   with counts for a full TP53 session
+4. TranscriptRecord interface — final field names and types as implemented
+5. GeneRecord.transcripts — final structure
+6. Known limitations — document explicitly, do not omit
+7. Phase 5.4 entry point — exactly which files to read, which
+   TranscriptRecord fields to consume, which NCBI API calls will be
+   needed for protein records
+8. Architecture summary — how Query → Gene → Transcript → (Protein)
+   chain connects, one clear paragraph
+
+--------------------------------------------------
+
+FINAL REPORT CHECKLIST
+
+After completing Steps 1-4, confirm in the report:
+- All readiness checklist items pass (list any that do not, with reason)
+- No new functionality was added in 5.3C
+- Protein Explorer (Phase 5.4) can begin from this state
+- Any remaining known limitations documented
+
+STOP. Do NOT implement Phase 5.4.
+Commit PHASE-5.3C-FINAL-REPORT.md only if TypeScript passes.
+Do not commit broken code.
