@@ -16,16 +16,6 @@
       "static/chunks/main-app.js",
       "static/chunks/app/results/page.js"
     ],
-    "/api/transcript/download/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/transcript/download/route.js"
-    ],
-    "/api/transcript/summary/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/transcript/summary/route.js"
-    ],
     "/api/analyze/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
