@@ -18,11 +18,27 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "Frontend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "API Server"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Research API"
+
+[[workflows.workflow]]
+name = "Frontend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=20891 pnpm --filter @workspace/research-copilot run dev"
+waitForPort = 20891
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "API Server"
@@ -56,8 +72,8 @@ path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
 [[ports]]
-localPort = 5000
-externalPort = 80
+localPort = 8000
+externalPort = 3000
 
 [[ports]]
 localPort = 8080
@@ -65,7 +81,7 @@ externalPort = 8080
 
 [[ports]]
 localPort = 20891
-externalPort = 3000
+externalPort = 80
 
 [nix]
 channel = "stable-25_05"
