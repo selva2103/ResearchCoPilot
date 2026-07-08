@@ -55,6 +55,24 @@ import { unknownResolution } from "@/types/query-resolution";
 
 export type { QueryResolution };
 
+// ─── Resolver-level constants ─────────────────────────────────────────────────
+
+/**
+ * Gene-symbol character pattern (mirrors gene.ts and genbank/search.ts).
+ * Kept local so the resolver index has no coupling to internal gene.ts constants.
+ */
+const GENE_SYMBOL_RE = /^[A-Z][A-Z0-9]{1,12}$/;
+
+/**
+ * Disease-qualifier vocabulary.
+ *
+ * When a query BOTH looks like a gene symbol AND contains one of these words,
+ * disease resolution is appropriate (e.g. "TP53 mutation", "BRCA1 syndrome").
+ * Bare gene-symbol queries without such qualifiers are NOT routed to disease.
+ */
+const DISEASE_QUALIFIER_RE =
+  /\b(mutation|mutant|variant|variants|syndrome|polymorphism|pathogenic|pathogenicity|deficiency|disease|disorder|carcinoma|lymphoma|leukemia|sarcoma|melanoma|glioma|tumor|tumour|cancer|neoplasm|malignancy|deletion|duplication|frameshift|truncation|translocation|rearrangement|amplification|haploinsufficiency)\b/i;
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
@@ -145,9 +163,33 @@ async function _resolveQuery(query: string): Promise<QueryResolution> {
   }
 
   // ── Step 2: Gene (NCBI Gene ESearch) ─────────────────────────────────────
-  // Only attempted when query matches GENE_SYMBOL_RE — prevents wasting API
-  // calls on organism names, disease names, or other non-symbol queries.
-  const geneResult = await resolveGene(q);
+  // Extended to handle lowercase and mixed-case gene symbols (e.g. "tp53",
+  // "brca1") — queries that look like gene symbols when uppercased are now
+  // attempted. This prevents MedGen disease concepts from winning for
+  // lowercase gene-symbol queries when the user clearly intends the gene.
+  //
+  // Priority rule: GENE_SYMBOL_RE must match (case-insensitively for the
+  // gate check). Non-symbol queries — multi-word, hyphened, longer than
+  // 13 chars — skip the gene step entirely as before.
+  //
+  // When the query is already all-uppercase it passes as-is (unchanged
+  // behaviour). When it is lowercase/mixed-case but matches the pattern when
+  // uppercased, we uppercase it so resolveGene()'s internal GENE_SYMBOL_RE
+  // guard passes and NCBI ESearch receives the canonical capitalisation.
+  // For the lowercase/mixed-case branch a digit is required (matching the
+  // heuristic in genbank/search.ts). This keeps gene-lookup opt-in for
+  // symbol-shaped words like "mouse", "cancer", or "virus" that have no
+  // digit — they are overwhelmingly disease/organism queries and should not
+  // consume an extra NCBI Gene API call. Pure-alpha lowercase genes such as
+  // "egfr" or "kras" will not be caught here, but their uppercase forms
+  // ("EGFR", "KRAS") already pass the first branch unchanged.
+  const geneQuery = GENE_SYMBOL_RE.test(q)
+    ? q                                                          // already uppercase — unchanged behaviour
+    : GENE_SYMBOL_RE.test(q.toUpperCase()) && /\d/.test(q)
+    ? q.toUpperCase()                                            // lowercase/mixed gene symbol with digit — normalise
+    : null;                                                      // not gene-symbol-shaped, or pure-alpha lowercase — skip
+
+  const geneResult = geneQuery != null ? await resolveGene(geneQuery) : null;
   if (geneResult && geneResult.confidence >= 0.60) {
     const mergedSynonyms = expanded
       ? [...(geneResult.synonyms ?? []), ...synonyms]
@@ -189,6 +231,34 @@ async function _resolveQuery(query: string): Promise<QueryResolution> {
   }
 
   // ── Step 4: Disease (NCBI MedGen ESearch) ────────────────────────────────
+  //
+  // Gate: bare gene-symbol-shaped queries with at least one digit and no
+  // disease-qualifier language are blocked from disease resolution.
+  //
+  // Rationale: MedGen contains variant/polymorphism entries that share gene
+  // symbol names (e.g. searching "TP53" surfaces "TP53 polymorphism" as a
+  // partial match). If the gene resolver ran but found nothing — due to a
+  // transient NCBI error, rate limit, or genuinely absent symbol — returning
+  // a spurious Disease resolution is worse than returning Unknown.
+  //
+  // The digit requirement is intentional: it allows pure-alpha disease nouns
+  // ("cancer", "tuberculosis", "diabetes") to still reach this step normally
+  // while blocking numeric gene symbols ("tp53", "brca1", "cdkn2a", "nf1").
+  // Queries that contain disease-qualifier language ("TP53 mutation",
+  // "BRCA1 syndrome") have spaces, so GENE_SYMBOL_RE.test(q.toUpperCase())
+  // returns false and the gate does not apply.
+  const isBareLikelyGeneSymbol =
+    /\d/.test(q) &&
+    GENE_SYMBOL_RE.test(q.toUpperCase()) &&
+    !DISEASE_QUALIFIER_RE.test(q);
+
+  if (isBareLikelyGeneSymbol) {
+    // The query looks like a gene symbol, not a disease concept.
+    // Return Unknown so the UI shows a neutral "not resolved" state rather
+    // than a misleading Disease resolution.
+    return unknownResolution(query);
+  }
+
   const diseaseResult = await resolveDisease(q);
   if (diseaseResult && diseaseResult.confidence >= 0.60) {
     if (expanded) {
