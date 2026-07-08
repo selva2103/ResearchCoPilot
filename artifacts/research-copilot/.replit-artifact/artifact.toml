@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = ["/", "/api/analyze", "/api/pubmed-test", "/api/transcript/download", "/api/transcript/summary"]
+paths = ["/", "/api/analyze", "/api/pubmed-test", "/api/transcript/download", "/api/transcript/summary", "/api/protein/summaries", "/api/protein/detail", "/api/protein/download"]
 localPort = 5000
 
 [services.development]

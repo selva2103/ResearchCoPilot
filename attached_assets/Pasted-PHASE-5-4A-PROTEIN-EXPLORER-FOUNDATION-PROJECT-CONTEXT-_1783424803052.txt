@@ -1,0 +1,424 @@
+PHASE 5.4A — PROTEIN EXPLORER FOUNDATION
+
+PROJECT CONTEXT — READ FIRST
+
+This repository is already updated to the latest GitHub commit. Pull
+latest before starting.
+
+Completed phases (do NOT rebuild any of these):
+- PubMed Explorer
+- GEO Explorer
+- Universal Pagination
+- Sequence Foundation (5.1)
+- Biological Query Resolver (5.1.5)
+- Gene Explorer (5.2)
+- Transcript Explorer Foundation (5.3A)
+- Transcript Explorer Interactive Features (5.3B Part 1)
+- Transcript Explorer Completion (5.3B Part 2)
+- Organism-aware Gene Ranking Patch
+- Phase 5.3C Hardening & Verification
+
+This phase (5.4A) builds the Protein Explorer Foundation only. It is
+intentionally scoped as a self-contained milestone that ends in a stable,
+fully working state. Phase 5.4B (a separate phase, separate session) will
+later add protein summary text, error/validation hardening, and full
+regression testing. Phase 5.4C (also separate) will do final hardening.
+
+Do NOT attempt to implement anything in the Phase 5.4B/5.4C list below.
+If you finish 5.4A early, stop and report — do not continue into 5.4B scope.
+
+--------------------------------------------------
+
+FIRST ACTION — ESTABLISH CURRENT STATE
+
+Before writing any code:
+
+1. Check whether PHASE-5.3C-FINAL-REPORT.md exists in the repo root.
+2. If it exists: read it, trust it, use it as your starting state — it
+   documents proteinAccession values, TranscriptRecord's final shape, and
+   the Entrez call map. Do NOT re-verify anything it already confirms.
+   Do NOT re-read unrelated repository files once the current state has
+   been established. After the initial inspection, limit repository reads
+   to only the files required for implementing Protein Explorer. This
+   minimizes credit usage and avoids unnecessary context expansion.
+3. If it does not exist or is incomplete: read only these files to
+   reconstruct state — do not re-run any prior phase's verification:
+   - lib/transcript/fetch.ts
+   - lib/transcript/parser.ts
+   - lib/transcript/index.ts
+   - types/transcript-record.ts
+   - GeneRecord type file
+   - app/api/analyze/route.ts
+   - Transcript Explorer UI component
+   Then write a brief note in your final report covering what you observed
+   (proteinAccession field status, MANE Select field values) before
+   proceeding.
+
+--------------------------------------------------
+
+ARCHITECTURE POSITION
+
+QueryResolution (5.1.5) → Gene Explorer (5.2) → Transcript Explorer (5.3)
+→ Protein Explorer Foundation (this phase) → [5.4B enhancements] →
+Protein Domains (5.6) / Structures (5.7)
+
+Protein Explorer is downstream of Transcript Explorer only. It receives a
+proteinAccessionVersion from an existing TranscriptRecord — it does not
+resolve queries, search genes, or accept independent user input in this
+phase or any future phase. There is no standalone protein search box.
+
+--------------------------------------------------
+
+CRITICAL API NOTE — CANONICAL PROTEIN
+
+Do NOT invent a canonical-protein heuristic. The canonical protein is
+whichever protein is attached to the transcript already flagged
+isCanonical: true (the MANE Select transcript, human genes only). If
+TranscriptRecord.isCanonical is null (non-human gene), no protein in that
+gene's list is canonical — do not guess based on length or accession order.
+
+CRITICAL API NOTE — REVIEWED VS PREDICTED
+
+Protein accession prefix maps deterministically:
+- NP_ → status "Reviewed"
+- XP_ → status "Predicted"
+- anything else → "Other"
+
+CRITICAL API NOTE — MOLECULAR WEIGHT
+
+Molecular weight is NOT guaranteed in the NCBI protein GenPept response.
+It appears only as an optional CALCULATED_MOL_WT qualifier in the feature
+table. Model this field as optional/nullable. Do not fabricate it and do
+not treat its absence as an error.
+
+Before writing the parser: inspect a real GenPept response for
+NP_000537.3 (TP53's canonical protein) to confirm actual field locations.
+Build the parser against the observed schema, not assumed field names.
+
+--------------------------------------------------
+
+IMPORTANT
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, Retry Logic,
+ModuleResult, Universal Exploration Framework, PubMed, GEO, Sequence
+Foundation (5.1), Biological Query Resolver (5.1.5), Gene Explorer (5.2),
+Transcript Explorer (5.3A/B/C), AI-generated sections, existing frontend
+layout outside the new nested protein panel.
+
+Do NOT implement in this phase:
+- Protein function/keywords/region summary text (Phase 5.4B)
+- Standalone protein search of any kind (never in scope, any phase)
+- Pfam / InterPro / SMART / CDD / AlphaFold / PDB / GO / Reactome linkage
+  (Phases 5.6+)
+- New rate limiter, new cache layer, or new retry system
+- Full validation/regression suite (deferred to 5.4B)
+
+Reuse: TranscriptRecord (5.3), GeneRecord (5.2), ModuleResult<T>,
+Universal Exploration Framework, existing retry/loading components,
+existing ncbi_entrez_limiter, existing Redis cache layer.
+
+Do not duplicate information already present in TranscriptRecord.
+ProteinRecord should only contain protein-specific metadata, or fields
+inherited directly for traceability (geneId, transcriptId, organism,
+geneSymbol). If a field can be looked up via the parent transcript, do
+not re-store it independently in ProteinRecord.
+
+Do NOT modify TranscriptRecord or GeneRecord unless a confirmed bug
+prevents Protein Explorer integration. Protein Explorer must consume the
+existing transcript layer as-is rather than redesign it.
+
+--------------------------------------------------
+
+GOAL
+
+When a user searches TP53, expands a transcript in the Transcript
+Explorer, they should now see that transcript's protein: accession, name,
+length, status (Reviewed/Predicted), and canonical flag if applicable —
+with a working FASTA download. No summary text, no domains, no downstream
+databases — just structured protein metadata nested under its transcript.
+
+--------------------------------------------------
+
+FILE 1: types/protein-record.ts
+
+Create ProteinRecord interface with these exact fields:
+- proteinAccession: string (e.g. NP_000537)
+- proteinAccessionVersion: string (e.g. NP_000537.3)
+- proteinName: string | null
+- length: number | null (amino acids — use "aa" as the unit everywhere)
+- molecularWeight: number | null (optional — see Critical API Note above)
+- sequenceAvailable: boolean (true if the FASTA sequence is retrievable
+  for this accession; set false if the accession is retired/unavailable,
+  so the "Download FASTA" button can be disabled upfront in 5.4B rather
+  than discovering the failure only on click)
+- status: "Reviewed" | "Predicted" | "Other" (derived from NP_/XP_ prefix)
+- sourceDatabase: "ncbi-refseq"
+- isCanonical: boolean | null (true only if inherited from this protein's
+  parent transcript's isCanonical; null for non-human genes; never
+  false-positive)
+- transcriptId: string (parent transcript's transcriptId, for traceback)
+- proteinAccessionVersionSource: "transcript" (documents that this
+  protein was never independently resolved)
+- geneId: string
+- geneSymbol: string
+- organism: string
+- ncbiProteinUrl: string (constructed from proteinAccessionVersion)
+
+Document every field with JSDoc. Mark optional fields as optional.
+
+--------------------------------------------------
+
+FILE 2: lib/protein/fetch.ts
+
+Function: fetchProteinSummaries(proteinAccessionVersions: string[])
+- Batch protein summary retrieval using the minimum number of NCBI calls
+  required. The implementation must first determine whether db=protein
+  esummary accepts accession.version identifiers directly. If
+  accession.version cannot be used reliably, resolve them internally to
+  Protein UIDs using the smallest possible number of NCBI requests (e.g.
+  batched esearch or elink), then perform the summary retrieval.
+- This internal UID resolution must remain completely encapsulated
+  inside the protein module. The rest of the application must continue
+  to use only proteinAccessionVersion identifiers and must never depend
+  on or expose NCBI UIDs.
+- This is called once when a gene's transcript list is expanded, covering
+  all proteins belonging to that gene's transcripts in the minimum number
+  of NCBI calls — never one call per protein.
+- Returned summaries must preserve the same order as the input
+  proteinAccessionVersions array. The protein module must never reorder
+  proteins independently of their parent transcript order.
+
+Function: fetchProteinDetail(proteinAccessionVersion: string)
+- Fetches full GenPept detail for ONE protein via
+  efetch db=protein rettype=gp retmode=text
+- Called only on demand, when a user expands a specific protein panel —
+  not during the batched summary call above.
+
+Both functions go through the existing ncbi_entrez_limiter. Use the
+existing shared httpx/fetch client with UPSTREAM_TIMEOUT_SECONDS.
+
+Cache strategy: cache summary, detail, and FASTA responses in the
+existing Redis cache layer using these exact keys:
+  protein:summary:{proteinAccessionVersion}
+  protein:detail:{proteinAccessionVersion}
+  protein:fasta:{proteinAccessionVersion}
+Protein records are effectively immutable once versioned — cache
+aggressively, no TTL shorter than what's already used for transcript
+FASTA caching.
+
+--------------------------------------------------
+
+FILE 3: lib/protein/parser.ts
+
+Function: parseProteinSummary(summaryResponse, transcriptRecord):
+ProteinRecord
+- Builds a ProteinRecord from the batched summary response for one
+  protein, using the parent TranscriptRecord for isCanonical inheritance,
+  geneId, geneSymbol, organism, and transcriptId.
+- Apply NP_/XP_ → status mapping deterministically.
+- isCanonical = transcriptRecord.isCanonical (direct inheritance, no
+  independent logic).
+
+Function: enrichWithDetail(proteinRecord, genPeptResponse): ProteinRecord
+- Merges in proteinName, molecularWeight (if present), and length from
+  the full GenPept detail fetch. Called only when detail is fetched
+  on-demand (Step: user expands protein panel).
+
+ProteinRecord is immutable after creation. enrichWithDetail must return a
+NEW ProteinRecord object with merged fields rather than mutating the
+object passed in. This matches the existing TranscriptRecord pattern and
+avoids stale-reference bugs in the UI.
+
+--------------------------------------------------
+
+FILE 4: lib/protein/index.ts
+
+Function: getProteinsForTranscripts(transcripts: TranscriptRecord[]):
+Promise<ModuleResult<ProteinRecord>>
+- Filters transcripts to only those with a non-null proteinAccession.
+- Batches the summary fetch (FILE 2) across all filtered transcripts in
+  one call.
+- Returns ModuleResult<ProteinRecord> with:
+  - status: "success" | "partial" | "empty" | "error"
+  - data: ProteinRecord[]
+  - count: data.length (never manually assigned)
+  - executionTimeMs: measured
+  - cached: boolean (true if served from Redis)
+  - timestamp: ISO 8601
+
+Function: getProteinDetail(proteinAccessionVersion: string):
+Promise<ModuleResult<ProteinRecord>>
+- Called when a single protein panel is expanded. Fetches detail (FILE 2),
+  enriches (FILE 3), returns single-item ModuleResult.
+
+--------------------------------------------------
+
+INTEGRATION 1: Transcript Explorer UI — nested protein panel
+
+Inside each transcript's existing expandable accordion row (built in
+5.3B), add a "Protein" sub-section:
+
+- If transcriptRecord.proteinAccession is null (NR_/XR_ transcript):
+  display "Non-coding transcript — no protein" and do NOT attempt any
+  protein fetch for that transcript.
+- If proteinAccession is present: on transcript expand, trigger the
+  batched summary fetch for the gene's proteins (if not already fetched
+  this session) and show: accession + version (linked to NCBI), status
+  badge (Reviewed/Predicted), length in aa, canonical badge (only if
+  isCanonical is true — never shown for non-human genes).
+- The protein subsection remains collapsed by default. Transcript
+  expansion loads only summary metadata (the batched fetch above). Full
+  GenPept detail is fetched only when the user explicitly expands the
+  protein subsection itself — not automatically when the transcript
+  expands.
+- On further expand of the protein sub-section specifically: fetch full
+  detail (name, molecular weight if present) and show a "Download FASTA"
+  button.
+- Molecular weight: if null, omit the field entirely — do not render
+  "undefined" or a placeholder.
+
+Do NOT create a new top-level "Protein Explorer" page/tab. Do NOT add
+independent pagination to the protein list — it inherits pagination from
+the Transcript Explorer above it.
+
+--------------------------------------------------
+
+INTEGRATION 2: Protein FASTA Download
+
+Wire the "Download FASTA" button. When clicked:
+- Fetch via efetch db=protein id={proteinAccessionVersion}
+  rettype=fasta retmode=text
+- Filename: {proteinAccessionVersion}.fasta
+- Lazy fetch only (on click, never pre-fetched)
+- Loading state on the button while fetching, error state with retry on
+  failure — reuse the exact same button component used for transcript
+  FASTA/CDS downloads in 5.3B. Do not build a new button component.
+- Goes through the existing ncbi_entrez_limiter — no concurrent
+  unthrottled downloads permitted.
+
+--------------------------------------------------
+
+ERROR HANDLING
+
+- No proteinAccession on transcript → explicit "Non-coding transcript —
+  no protein" state (Integration 1) — never a blank section, never an
+  attempted fetch.
+- Protein summary fetch fails → status "error", transcript row still
+  visible, protein sub-section shows "Protein data temporarily
+  unavailable."
+- Protein detail fetch fails (e.g. retired accession) → error state in
+  the protein sub-section only, with retry — transcript row and other
+  transcripts unaffected.
+- FASTA download fails → error state on that button, retry available,
+  other transcripts/proteins unaffected.
+- Never crash the transcript row or gene card because a protein
+  operation failed.
+
+--------------------------------------------------
+
+VALIDATION (run after implementation is complete — report actual values,
+not "works")
+
+TP53 (human):
+- Expand transcript NM_000546.6 (MANE Select) → confirm protein panel
+  shows NP_000537.3, status Reviewed, isCanonical true
+- Expand a non-MANE human NM_ transcript → confirm:
+  - status is Reviewed or Predicted as appropriate
+  - isCanonical is false (not null — this is a human protein-coding
+    transcript, just not the MANE Select one)
+  - no canonical badge is displayed
+- Confirm ONLY ONE protein across the entire TP53 list shows the
+  canonical badge
+- Download FASTA for NP_000537.3 → confirm filename and show first 2
+  lines of the downloaded file
+
+Non-coding transcript (any NR_/XR_ transcript on any gene):
+- Confirm "Non-coding transcript — no protein" appears
+- Confirm no Entrez protein call was fired for that transcript (check logs)
+
+Mouse Trp53 (non-human):
+- Confirm isCanonical is null (not true/false) for every protein in the list
+- Confirm no canonical badge appears anywhere in the mouse protein list
+- Null here means "MANE does not apply to this organism" — it must never
+  be reported as false, which would incorrectly imply MANE was evaluated
+  and this protein simply wasn't selected
+
+Rate/batch check:
+- Expand TP53's full transcript list (15+ transcripts with proteins) →
+  confirm protein summaries are retrieved using the minimum number of
+  NCBI calls supported by the observed Protein API behaviour. One
+  batched request is preferred, but if an initial UID-resolution step is
+  required, the implementation may legitimately use two batched calls
+  (esearch/elink → esummary). Under no circumstance should one summary
+  request be issued per transcript. Show the actual call count and
+  sequence from logs.
+
+--------------------------------------------------
+
+REGRESSION TESTING (targeted — full suite is Phase 5.4B)
+
+With actual values shown:
+- Transcript Explorer: TP53 transcript count, MANE Select accession,
+  expand/collapse still works, FASTA/CDS downloads still work unchanged
+- Gene Explorer: TP53 Gene ID and chromosome unchanged
+- No TypeScript errors
+- No Python files modified
+- No AI-generated sections modified
+
+--------------------------------------------------
+
+END STATE DOCUMENTATION (required for Phase 5.4B handoff)
+
+Write this as if the reader has never seen this conversation:
+
+1. Exact file paths created or modified in this phase
+2. ProteinRecord interface — final field names and types as implemented
+3. Entrez call map: which user action triggers which protein-related
+   calls, with exact call counts for a full TP53 session (list expand +
+   one protein FASTA download)
+4. Caching strategy implemented (Redis keys used)
+5. Canonical protein inheritance — confirm mechanism matches spec exactly
+6. Known limitations — document explicitly, do not omit (e.g. any
+   proteins where GenPept parsing failed, any fields consistently null)
+7. Phase 5.4B entry point — exactly which files to read, which
+   ProteinRecord fields still need summary/keyword/region text, and
+   which error states still need hardening
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits are exhausted before this phase is complete:
+1. Finish the current file — never leave a syntactically broken file.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit only working code, even if incomplete in scope.
+4. Write PHASE-5.4A-PARTIAL-REPORT.md containing:
+   - Completed work
+   - Remaining work
+   - Files modified
+   - Exact next implementation step (specific enough that a new session
+     can resume without re-reading this entire prompt from scratch)
+
+--------------------------------------------------
+
+FINAL REPORT
+
+Report:
+- Files created/modified
+- ProteinRecord interface as implemented
+- NCBI protein API response structure observed (GenPept field locations)
+- Entrez call count map (batched summary + on-demand detail + FASTA)
+- Validation results per the Validation section above (actual accession
+  values, actual call counts — not "works")
+- Regression results with actual evidence
+- Known limitations
+- End state documentation per above
+
+Confirm: no regressions, no 5.4B/5.4C scope implemented, no new rate
+limiter/cache/retry introduced, no standalone protein search added
+anywhere, no Python changes, no AI changes, app fully stable and runnable
+at end of this phase.
+
+STOP. Do NOT implement Phase 5.4B.
+Commit PHASE-5.4A-FINAL-REPORT.md only if TypeScript passes.
+Do not commit broken code.

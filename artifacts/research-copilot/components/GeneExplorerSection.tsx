@@ -31,9 +31,11 @@
  *   The UI notes this in the expandable resources footer of non-primary cards.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { GeneRecord } from "@/types/gene-record";
 import type { TranscriptRecord } from "@/types/transcript-record";
+import type { ProteinRecord } from "@/types/protein-record";
+import type { ModuleResult } from "@/types/module-result";
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -368,10 +370,63 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
   const [visibleCount, setVisibleCount] = useState(TRANSCRIPT_PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  const handleToggle = (accessionVersion: string) => {
+  // ── Protein summaries — fetched once per gene on first transcript expand ──
+  // keyed by proteinAccessionVersion → ProteinRecord
+  const [proteinSummaries, setProteinSummaries] = useState<Map<string, ProteinRecord> | null>(null);
+  const [proteinSummaryLoading, setProteinSummaryLoading] = useState(false);
+  const [proteinSummaryError, setProteinSummaryError] = useState<string | null>(null);
+  // Guard against duplicate in-flight requests.
+  const proteinFetchedRef = useRef(false);
+
+  const fetchProteinSummaries = async () => {
+    if (proteinFetchedRef.current || proteinSummaryLoading) return;
+    const allRecords = records ?? [];
+    const codingTranscripts = allRecords.filter((t) => t.proteinAccessionVersion !== null);
+    if (codingTranscripts.length === 0) {
+      // No coding transcripts — mark as fetched with empty map.
+      proteinFetchedRef.current = true;
+      setProteinSummaries(new Map());
+      return;
+    }
+    proteinFetchedRef.current = true;
+    setProteinSummaryLoading(true);
+    try {
+      const res = await fetch("/api/protein/summaries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcripts: allRecords }),
+      });
+      const result: ModuleResult<ProteinRecord> = await res.json();
+      if (result.status === "error") {
+        setProteinSummaryError(result.error?.message ?? "Protein data temporarily unavailable.");
+      } else {
+        const map = new Map<string, ProteinRecord>();
+        for (const pr of result.data) {
+          map.set(pr.proteinAccessionVersion, pr);
+        }
+        setProteinSummaries(map);
+        if (result.status === "partial" && result.error) {
+          setProteinSummaryError(result.error.message);
+        }
+      }
+    } catch {
+      setProteinSummaryError("Protein data temporarily unavailable.");
+    } finally {
+      setProteinSummaryLoading(false);
+    }
+  };
+
+  const handleToggle = (accessionVersion: string, hasCodingProtein: boolean) => {
     try {
       setExpandError(null);
+      const isOpening = expandedAccession !== accessionVersion;
       setExpandedAccession((prev) => (prev === accessionVersion ? null : accessionVersion));
+      // Trigger batched protein summary fetch only when expanding a coding transcript
+      // (one with a proteinAccessionVersion). Non-coding transcripts never trigger
+      // a protein NCBI call — there is no protein to fetch for them.
+      if (isOpening && hasCodingProtein && !proteinFetchedRef.current) {
+        fetchProteinSummaries();
+      }
     } catch {
       // Defensive — expand/collapse is pure client state and should never throw,
       // but per spec the gene card must never crash on an expand failure.
@@ -444,7 +499,14 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
               key={t.accessionVersion}
               transcript={t}
               isExpanded={expandedAccession === t.accessionVersion}
-              onToggleExpand={() => handleToggle(t.accessionVersion)}
+              onToggleExpand={() => handleToggle(t.accessionVersion, t.proteinAccessionVersion !== null)}
+              proteinRecord={
+                t.proteinAccessionVersion
+                  ? (proteinSummaries?.get(t.proteinAccessionVersion) ?? undefined)
+                  : null
+              }
+              proteinSummaryLoading={proteinSummaryLoading}
+              proteinSummaryError={proteinSummaryError}
             />
           ))}
         </div>
@@ -513,10 +575,17 @@ function TranscriptRow({
   transcript,
   isExpanded,
   onToggleExpand,
+  proteinRecord,
+  proteinSummaryLoading,
+  proteinSummaryError,
 }: {
   transcript: TranscriptRecord;
   isExpanded: boolean;
   onToggleExpand: () => void;
+  /** undefined = summaries not yet fetched; null = non-coding transcript (no protein) */
+  proteinRecord: ProteinRecord | null | undefined;
+  proteinSummaryLoading: boolean;
+  proteinSummaryError: string | null;
 }) {
   const prefixColor: Record<TranscriptRecord["accessionPrefix"], string> = {
     NM_: "bg-emerald-600 text-white",
@@ -756,6 +825,260 @@ function TranscriptRow({
               </span>
             )}
           </div>
+
+          {/* ── Protein sub-panel ─────────────────────────────────────── */}
+          <ProteinPanel
+            transcript={transcript}
+            isCoding={isCoding}
+            proteinRecord={proteinRecord}
+            proteinSummaryLoading={proteinSummaryLoading}
+            proteinSummaryError={proteinSummaryError}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Protein sub-panel ────────────────────────────────────────────────────────
+
+/**
+ * Renders the Protein sub-section nested inside an expanded TranscriptRow.
+ *
+ * Behaviour:
+ *   - Non-coding transcript (isCoding=false OR proteinRecord=null):
+ *       → "Non-coding transcript — no protein"
+ *   - Protein summaries still loading:
+ *       → loading spinner
+ *   - Protein summaries failed:
+ *       → "Protein data temporarily unavailable."
+ *   - Protein summary available (proteinRecord present):
+ *       → collapsed sub-accordion showing accession, status, length, canonical badge
+ *       → on expand: fetch detail (proteinName, molecularWeight) + Download FASTA button
+ */
+function ProteinPanel({
+  transcript,
+  isCoding,
+  proteinRecord,
+  proteinSummaryLoading,
+  proteinSummaryError,
+}: {
+  transcript: TranscriptRecord;
+  isCoding: boolean;
+  proteinRecord: ProteinRecord | null | undefined;
+  proteinSummaryLoading: boolean;
+  proteinSummaryError: string | null;
+}) {
+  const [detailExpanded, setDetailExpanded] = useState(false);
+  const [detailRecord, setDetailRecord] = useState<ProteinRecord | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [fastaState, setFastaState] = useState<DownloadState>({ status: "idle" });
+  const detailFetchedRef = useRef(false);
+
+  const handleDetailToggle = async () => {
+    const opening = !detailExpanded;
+    setDetailExpanded((v) => !v);
+    if (opening && !detailFetchedRef.current && proteinRecord) {
+      detailFetchedRef.current = true;
+      setDetailLoading(true);
+      setDetailError(null);
+      try {
+        const res = await fetch("/api/protein/detail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accession: proteinRecord.proteinAccessionVersion, baseRecord: proteinRecord }),
+        });
+        const result: ModuleResult<ProteinRecord> = await res.json();
+        if (result.status === "error" || result.data.length === 0) {
+          setDetailError(result.error?.message ?? "Could not load protein detail.");
+        } else {
+          setDetailRecord(result.data[0]);
+        }
+      } catch {
+        setDetailError("Network error — protein detail unavailable.");
+      } finally {
+        setDetailLoading(false);
+      }
+    }
+  };
+
+  const runProteinFastaDownload = () => {
+    if (!proteinRecord) return;
+    setFastaState({ status: "loading" });
+    enqueueDownload(async () => {
+      try {
+        const res = await fetch(
+          `/api/protein/download?accession=${encodeURIComponent(proteinRecord.proteinAccessionVersion)}`
+        );
+        if (!res.ok) {
+          let message = `Download failed (HTTP ${res.status}).`;
+          let rateLimited = res.status === 429;
+          try {
+            const body = (await res.json()) as { error?: string; rateLimited?: boolean };
+            if (body.error) message = body.error;
+            if (body.rateLimited) rateLimited = true;
+          } catch { /* ignore */ }
+          setFastaState({ status: "error", message, rateLimited });
+          return;
+        }
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") ?? "";
+        const filenameMatch = disposition.match(/filename="([^"]+)"/);
+        const filename = filenameMatch?.[1] ?? `${proteinRecord.proteinAccessionVersion}.fasta`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setFastaState({ status: "idle" });
+      } catch (err) {
+        setFastaState({
+          status: "error",
+          message: err instanceof Error ? err.message : "Network error — could not reach the download service.",
+        });
+      }
+    }).catch(() => {
+      setFastaState({ status: "error", message: "Download failed unexpectedly. Please try again." });
+    });
+  };
+
+  // The displayed record is the enriched detail if available, otherwise the summary.
+  const displayRecord = detailRecord ?? proteinRecord;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700/60">
+      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium uppercase tracking-wide mb-1.5">
+        🧪 Protein
+      </p>
+
+      {/* Non-coding transcript — no protein fetch attempted */}
+      {(!isCoding || proteinRecord === null) && (
+        <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+          Non-coding transcript — no protein
+        </p>
+      )}
+
+      {/* Loading summaries */}
+      {isCoding && proteinRecord === undefined && proteinSummaryLoading && (
+        <div className="flex items-center gap-1.5">
+          <LoadingSpinner />
+          <span className="text-xs text-slate-400 dark:text-slate-500">Loading protein data…</span>
+        </div>
+      )}
+
+      {/* Summary fetch error — transcript row and other sections unaffected */}
+      {isCoding && proteinRecord === undefined && !proteinSummaryLoading && proteinSummaryError && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          ⚠️ Protein data temporarily unavailable.
+        </p>
+      )}
+
+      {/* Protein summary available — show collapsed sub-accordion */}
+      {isCoding && displayRecord && (
+        <div className="rounded-md bg-slate-100 dark:bg-slate-800/60 overflow-hidden">
+          {/* Sub-accordion header — summary metadata (always visible) */}
+          <button
+            type="button"
+            onClick={handleDetailToggle}
+            className="w-full flex flex-wrap items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-200 dark:hover:bg-slate-700/60 transition-colors"
+          >
+            {/* Accession link */}
+            <a
+              href={displayRecord.ncbiProteinUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-mono text-emerald-600 dark:text-emerald-400 hover:underline font-medium"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {displayRecord.proteinAccessionVersion} ↗
+            </a>
+
+            {/* Status badge */}
+            <span
+              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                displayRecord.status === "Reviewed"
+                  ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200"
+                  : displayRecord.status === "Predicted"
+                  ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400"
+                  : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
+              }`}
+            >
+              {displayRecord.status}
+            </span>
+
+            {/* Length */}
+            {displayRecord.length !== null && (
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                {displayRecord.length.toLocaleString()} aa
+              </span>
+            )}
+
+            {/* Canonical badge — only if isCanonical is explicitly true */}
+            {displayRecord.isCanonical === true && (
+              <span className="text-[10px] font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 px-1.5 py-0.5 rounded-full">
+                Canonical
+              </span>
+            )}
+
+            <span className="ml-auto text-slate-400 dark:text-slate-500 text-[11px]">
+              {detailExpanded ? "▲" : "▼"}
+            </span>
+          </button>
+
+          {/* Detail section — shown only when expanded */}
+          {detailExpanded && (
+            <div className="px-2.5 pb-2.5 pt-1 border-t border-slate-200 dark:border-slate-700/60 space-y-2">
+              {/* Loading detail */}
+              {detailLoading && (
+                <div className="flex items-center gap-1.5">
+                  <LoadingSpinner />
+                  <span className="text-xs text-slate-400 dark:text-slate-500">Loading protein detail…</span>
+                </div>
+              )}
+
+              {/* Detail error */}
+              {!detailLoading && detailError && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  ⚠️ {detailError}
+                </p>
+              )}
+
+              {/* Detail fields */}
+              {!detailLoading && !detailError && (
+                <div className="space-y-1.5">
+                  {displayRecord.proteinName && (
+                    <div className="space-y-0.5">
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Name</p>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-snug">
+                        {displayRecord.proteinName}
+                      </p>
+                    </div>
+                  )}
+                  {displayRecord.molecularWeight != null && (
+                    <div className="space-y-0.5">
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Molecular Weight</p>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 font-mono">
+                        {displayRecord.molecularWeight.toLocaleString()} Da
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* FASTA download — shown once detail loaded */}
+              {!detailLoading && (
+                <DownloadButton
+                  label="Download FASTA"
+                  state={fastaState}
+                  onClick={runProteinFastaDownload}
+                />
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

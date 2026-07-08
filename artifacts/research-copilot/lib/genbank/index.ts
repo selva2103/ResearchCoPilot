@@ -219,7 +219,10 @@ export async function searchSequenceResources(
     let resources: SequenceResource[];
 
     if (queryType === "gene-symbol") {
-      resources = await resolveGeneSymbol(query.trim());
+      // Uppercase the symbol before querying NCBI Gene ESearch.
+      // "TP53[Gene Name]" returns 1 exact hit; "tp53[Gene Name]" returns thousands of
+      // substring matches. Using uppercase gives the same precision as the gene resolver.
+      resources = await resolveGeneSymbol(query.trim().toUpperCase());
     } else if (queryType === "accession") {
       resources = await resolveAccession(query.trim());
     } else {

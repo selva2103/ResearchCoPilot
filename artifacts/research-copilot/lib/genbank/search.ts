@@ -53,8 +53,17 @@ export type QueryType = "gene-symbol" | "accession" | "organism";
 
 export function classifyQuery(query: string): QueryType {
   const trimmed = query.trim();
+  // Accession regex has /i flag — already case-insensitive.
   if (ACCESSION_RE.test(trimmed)) return "accession";
+  // Gene-symbol regex requires all-uppercase, so it handles "TP53" directly.
   if (GENE_SYMBOL_RE.test(trimmed)) return "gene-symbol";
+  // Allow lowercase/mixed-case gene symbols that contain at least one digit
+  // (e.g. "tp53", "brca1", "Trp53").  Pure-alphabetic lowercase words such as
+  // "mouse" or "arabidopsis" are intentionally left as "organism" to prevent
+  // misrouting common organism names when the biological resolver returns a
+  // LOW-confidence or Unknown result and passes the raw lowercase string here.
+  const lc = trimmed.toLowerCase();
+  if (/\d/.test(lc) && GENE_SYMBOL_RE.test(lc.toUpperCase())) return "gene-symbol";
   return "organism";
 }
 
