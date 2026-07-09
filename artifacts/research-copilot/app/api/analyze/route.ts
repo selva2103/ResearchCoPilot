@@ -11,6 +11,58 @@ import type { Dataset } from "@/types/dataset";
 import type { SequenceResource } from "@/types/sequence-resource";
 import type { GeneRecord } from "@/types/gene-record";
 import type { QueryResolution } from "@/types/query-resolution";
+import { toConfidenceTier } from "@/types/query-resolution";
+import type { NormalizedQuery } from "@/types/normalized-query";
+
+/**
+ * Gene Explorer accepts a resolved gene identifier via a QueryResolution-shaped
+ * option object (its input shape is unchanged from before Phase R — see
+ * INTEGRATION 1 in the Phase R spec). This adapter derives that shape from the
+ * orchestrator's single NormalizedQuery so Gene Explorer never needs to know
+ * about NormalizedQuery directly.
+ */
+function buildGeneAdapterResolution(nq: NormalizedQuery): QueryResolution | null {
+  if (nq.gene) {
+    return {
+      originalQuery: nq.rawQuery,
+      normalizedQuery: nq.gene.symbol,
+      queryType: "Gene",
+      confidence: nq.confidence,
+      confidenceTier: toConfidenceTier(nq.confidence),
+      primaryIdentifier: nq.gene.geneId ?? undefined,
+      identifierScheme: nq.gene.geneId ? "ncbi-gene" : undefined,
+      organism: nq.organism?.name ?? nq.gene.organismMatched ?? undefined,
+      taxonomyId: nq.organism?.taxId ?? undefined,
+      relationships: {},
+    };
+  }
+  if (nq.organism || nq.disease || nq.protein) {
+    // No gene identified, but a different entity type was — gate Gene Explorer
+    // off in the same way a non-gene HIGH-confidence QueryResolution used to.
+    return {
+      originalQuery: nq.rawQuery,
+      normalizedQuery: nq.rawQuery,
+      queryType: nq.organism ? "Organism" : nq.disease ? "Disease" : "Accession",
+      confidence: nq.confidence,
+      confidenceTier: toConfidenceTier(nq.confidence),
+      relationships: {},
+    };
+  }
+  return null;
+}
+
+/**
+ * Derive the effective query string passed to PubMed/GEO/Sequence Foundation
+ * from a NormalizedQuery. Mirrors the old HIGH-confidence-tier auto-apply rule
+ * (>= 0.90): below that threshold, the raw query is used unchanged.
+ */
+function deriveEffectiveQuery(nq: NormalizedQuery, rawQuery: string): string {
+  if (nq.confidence < 0.9) return rawQuery;
+  if (nq.gene) return nq.gene.symbol;
+  if (nq.disease) return nq.disease.name;
+  if (nq.organism) return nq.organism.name;
+  return rawQuery;
+}
 
 // TODO: SRA integration         — NCBI SRA for raw sequencing runs linked to GSE accessions
 // TODO: ArrayExpress integration — EBI ArrayExpress for European transcriptomics datasets
@@ -134,16 +186,16 @@ interface AnalyzeResponse {
   genesError?: string;
 
   /**
-   * Structured result of the Biological Query Resolution Layer (Phase 5.1.5).
+   * Structured result of the Biological Query Resolution Layer (Phase R).
    * Populated on the initial load only — null on Load More requests.
    *
-   * Confidence-tier gating (Step 5):
-   *   HIGH   (≥ 0.90) — effectiveQuery was auto-set to normalizedQuery; downstream
-   *                      modules received the normalized query on this request.
-   *   MEDIUM (0.60–0.89) — suggestion shown to user; originalQuery was used for modules.
-   *   LOW    (< 0.60)    — Unknown; originalQuery was used unchanged.
+   * NormalizedQuery extracts ALL recognized entities from the query (gene,
+   * organism, disease, protein/accession) rather than a single classification —
+   * see types/normalized-query.ts. effectiveQuery is auto-derived from the
+   * resolved entity only when confidence >= 0.90; below that, the raw query
+   * is used unchanged for downstream modules.
    */
-  resolution: QueryResolution | null;
+  resolution: NormalizedQuery | null;
 
   /**
    * The query string that was actually passed to PubMed, GEO, and Sequence Foundation.
@@ -215,21 +267,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   //
   // Load More: the frontend passes resolvedQuery back so we don't re-run the
   // resolver and so pagination stays aligned with the initial-load query.
-  let resolution: QueryResolution | null = null;
+  let resolution: NormalizedQuery | null = null;
+  let geneAdapterResolution: QueryResolution | null = null;
   let effectiveQuery: string;
 
   if (isInitialLoad) {
     resolution = await resolveQuery(query);
-    if (
-      resolution.confidenceTier === "high" &&
-      resolution.normalizedQuery !== resolution.originalQuery
-    ) {
-      // HIGH tier: auto-apply the normalized query to all downstream modules
-      effectiveQuery = resolution.normalizedQuery;
-    } else {
-      // MEDIUM or LOW: use the original query unchanged
-      effectiveQuery = query;
-    }
+    geneAdapterResolution = buildGeneAdapterResolution(resolution);
+    effectiveQuery = deriveEffectiveQuery(resolution, query);
   } else {
     // Load More: use the resolvedQuery the frontend passes back (from initial response).
     // Falls back to originalQuery if not provided or malformed (backward compatibility).
@@ -336,7 +381,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const geneResult = await searchGeneExplorer(effectiveQuery, {
       limit,
       offset: genesOffset,
-      resolution,
+      resolution: geneAdapterResolution,
     });
 
     genes = geneResult.data;

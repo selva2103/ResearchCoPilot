@@ -45,6 +45,15 @@
  *   with a `// TODO Phase 5.4: fetch protein accession via ELink db=gene→db=protein`
  *   marker in lib/transcript/parser.ts — Phase 5.4 can reuse geneId/proteinAccession
  *   as-is and only needs to backfill the null cases via ELink.
+ *
+ * PIPELINE INVARIANT (Phase R):
+ *   Transcript Explorer MUST NOT execute unless a resolved NCBI GeneID is
+ *   available. If geneId is missing/empty, searchTranscripts() returns a
+ *   structured "Resolution Required" ModuleResult (status: "empty",
+ *   error.code: "RESOLUTION_REQUIRED") instead of attempting any fallback
+ *   search by raw symbol or free text. This guarantees identifier consistency
+ *   throughout the pipeline and prevents a future caller from accidentally
+ *   reintroducing raw-symbol fallback searches when extending this module.
  */
 
 import type { TranscriptRecord } from "@/types/transcript-record";
@@ -82,6 +91,23 @@ export async function searchTranscripts(
 ): Promise<ModuleResult<TranscriptRecord>> {
   const startedAt = performance.now();
   const isHuman = taxonomyId === "9606";
+
+  // ── Pipeline Invariant (Phase R) ──────────────────────────────────────────
+  // Never execute without a resolved NCBI GeneID — no fallback search by raw
+  // symbol or free text. See PIPELINE INVARIANT note above.
+  if (!geneId || !geneId.trim()) {
+    return buildModuleResult({
+      module: "transcript-explorer",
+      status: "empty",
+      data: [],
+      error: {
+        code: "RESOLUTION_REQUIRED",
+        message:
+          "Transcript Explorer requires a resolved NCBI GeneID and cannot fall back to a raw-symbol search.",
+      },
+      startedAt,
+    });
+  }
 
   // ── In-session cache check ─────────────────────────────────────────────────
   const cache = options.cache;

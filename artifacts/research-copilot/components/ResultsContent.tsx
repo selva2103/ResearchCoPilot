@@ -6,7 +6,8 @@ import type { Paper } from "@/types/paper";
 import type { Dataset } from "@/types/dataset";
 import type { SequenceResource } from "@/types/sequence-resource";
 import type { GeneRecord } from "@/types/gene-record";
-import type { QueryResolution } from "@/types/query-resolution";
+import type { NormalizedQuery } from "@/types/normalized-query";
+import { toConfidenceTier } from "@/types/query-resolution";
 import GeneExplorerSection from "@/components/GeneExplorerSection";
 
 // TODO: OpenAI integration — landscape, emergingAreas, researchGaps, and projects
@@ -51,7 +52,7 @@ interface AnalysisResponse {
    * Structured result of the Biological Query Resolution Layer (Phase 5.1.5).
    * Populated on the initial load only — null on Load More requests.
    */
-  resolution: QueryResolution | null;
+  resolution: NormalizedQuery | null;
   /**
    * The query string actually passed to PubMed, GEO, and Sequence Foundation.
    * Equals normalizedQuery for HIGH-confidence resolutions; equals originalQuery otherwise.
@@ -110,7 +111,7 @@ export default function ResultsContent() {
 
   // ── Biological Query Resolution state (Phase 5.1.5) ───────────────────────
   // Populated on initial load only. Reset when the user submits a new query.
-  const [resolution, setResolution] = useState<QueryResolution | null>(null);
+  const [resolution, setResolution] = useState<NormalizedQuery | null>(null);
   /**
    * The query string that was actually used for the initial load (may differ from `q`
    * when the resolver produced a HIGH-confidence normalized form).
@@ -1225,7 +1226,7 @@ function QueryResolutionCard({
   resolution,
   originalQuery,
 }: {
-  resolution: QueryResolution | null;
+  resolution: NormalizedQuery | null;
   originalQuery: string;
 }) {
   const router = useRouter();
@@ -1233,17 +1234,27 @@ function QueryResolutionCard({
   // Don't render if no resolution data at all
   if (!resolution) return null;
 
-  const tierCfg = TIER_CONFIG[resolution.confidenceTier];
-  const isUnknown = resolution.queryType === "Unknown";
-  const isHigh = resolution.confidenceTier === "high";
-  const isMedium = resolution.confidenceTier === "medium";
-  const queryChanged = resolution.normalizedQuery !== resolution.originalQuery;
-  const genes = resolution.relationships?.genes ?? [];
-  const organisms = resolution.relationships?.organisms ?? [];
-  const candidates = resolution.candidateMatches ?? [];
+  const { gene, organism, disease, protein } = resolution;
+  const isUnknown = !gene && !organism && !disease && !protein;
+  const tier = toConfidenceTier(resolution.confidence);
+  const tierCfg = TIER_CONFIG[tier];
+  const isHigh = tier === "high";
+  const isMedium = tier === "medium";
+
+  // The primary display label — same precedence used by the orchestrator to
+  // derive effectiveQuery (gene > disease > organism > raw query).
+  const normalizedLabel = gene?.symbol ?? disease?.name ?? organism?.name ?? resolution.rawQuery;
+  const queryChanged = normalizedLabel !== resolution.rawQuery;
+  const candidates = resolution.candidates ?? [];
+  const entityTypes = [
+    gene && "Gene",
+    organism && "Organism",
+    disease && "Disease",
+    protein && "Accession",
+  ].filter((v): v is string => Boolean(v));
 
   function applyResolution() {
-    router.push(`/results?q=${encodeURIComponent(resolution!.normalizedQuery)}`);
+    router.push(`/results?q=${encodeURIComponent(normalizedLabel)}`);
   }
 
   return (
@@ -1256,7 +1267,7 @@ function QueryResolutionCard({
           {tierCfg.label}
         </span>
         <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
-          Phase 5.1.5
+          Phase R
         </span>
       </div>
 
@@ -1275,11 +1286,6 @@ function QueryResolutionCard({
                 organism, or disease with sufficient confidence. All modules searched
                 using the original query unchanged.
               </p>
-              {resolution.notes && (
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 italic">
-                  {resolution.notes}
-                </p>
-              )}
             </div>
           </div>
         )}
@@ -1289,45 +1295,47 @@ function QueryResolutionCard({
           <>
             {/* Type + normalized query row */}
             <div className="flex flex-wrap items-center gap-2">
-              <TypeChip type={resolution.queryType} />
+              {entityTypes.map((t) => (
+                <TypeChip key={t} type={t} />
+              ))}
               {queryChanged && (
                 <>
                   <span className="text-xs text-slate-400 dark:text-slate-500">→</span>
                   <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    {resolution.normalizedQuery}
+                    {normalizedLabel}
                   </span>
                   <span className="text-xs text-slate-400 dark:text-slate-500">
-                    (from &ldquo;{resolution.originalQuery}&rdquo;)
+                    (from &ldquo;{resolution.rawQuery}&rdquo;)
                   </span>
                 </>
               )}
               {!queryChanged && (
                 <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  {resolution.normalizedQuery}
+                  {normalizedLabel}
                 </span>
               )}
             </div>
 
             {/* Metadata chips row */}
             <div className="flex flex-wrap gap-1.5">
-              {resolution.primaryIdentifier && resolution.identifierScheme && (
+              {gene?.geneId && (
                 <span className="text-xs font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
-                  {resolution.identifierScheme}:{resolution.primaryIdentifier}
+                  ncbi-gene:{gene.geneId}
                 </span>
               )}
-              {resolution.matchedProvider && (
-                <span className="text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full">
-                  via {resolution.matchedProvider}
+              {protein?.accession && (
+                <span className="text-xs font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                  {protein.accession}
                 </span>
               )}
-              {resolution.organism && (
+              {organism && (
                 <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
-                  🧬 {resolution.organism}
+                  🧬 {organism.name}
                 </span>
               )}
-              {resolution.taxonomyId && (
+              {organism?.taxId && (
                 <span className="text-xs font-mono bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 px-2 py-0.5 rounded-full">
-                  TaxID {resolution.taxonomyId}
+                  TaxID {organism.taxId}
                 </span>
               )}
               {resolution.confidence > 0 && (
@@ -1337,57 +1345,23 @@ function QueryResolutionCard({
               )}
             </div>
 
-            {/* Related genes chips */}
-            {genes.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide font-medium">
-                  Related Genes
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {genes.map((g) => (
-                    <span
-                      key={g}
-                      className="text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 px-2 py-0.5 rounded-full font-mono font-medium"
-                    >
-                      {g}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Related organisms chips */}
-            {organisms.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide font-medium">
-                  Related Organisms
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {organisms.map((org) => (
-                    <span
-                      key={org}
-                      className="text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 px-2 py-0.5 rounded-full italic"
-                    >
-                      {org}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Ambiguity — candidate matches */}
-            {resolution.ambiguityDetected && candidates.length > 1 && (
+            {resolution.ambiguous && candidates.length > 1 && (
               <div className="space-y-2">
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 uppercase tracking-wide font-semibold">
                   ⚠ Ambiguous — multiple candidates
                 </p>
                 <div className="divide-y divide-slate-100 dark:divide-slate-700/50 rounded-xl border border-amber-200 dark:border-amber-800/50 overflow-hidden">
-                  {candidates.slice(0, 5).map((c) => (
-                    <div key={c.identifier} className="px-3 py-2 flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-mono text-slate-500 dark:text-slate-400">{c.identifier}</span>
-                      <span className="text-xs font-medium text-slate-700 dark:text-slate-200">{c.displayName}</span>
-                      {c.organism && (
-                        <span className="text-xs italic text-slate-400 dark:text-slate-500">{c.organism}</span>
+                  {candidates.slice(0, 5).map((c, i) => (
+                    <div key={c.gene?.geneId ?? c.organism?.name ?? i} className="px-3 py-2 flex items-center gap-2 flex-wrap">
+                      {c.gene?.geneId && (
+                        <span className="text-xs font-mono text-slate-500 dark:text-slate-400">{c.gene.geneId}</span>
+                      )}
+                      <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                        {c.gene?.symbol ?? c.organism?.name ?? "—"}
+                      </span>
+                      {c.organism && c.gene && (
+                        <span className="text-xs italic text-slate-400 dark:text-slate-500">{c.organism.name}</span>
                       )}
                       <span className="ml-auto text-xs text-slate-400 dark:text-slate-500">
                         {Math.round(c.confidence * 100)}%
@@ -1398,15 +1372,20 @@ function QueryResolutionCard({
               </div>
             )}
 
-            {/* Synonym / normalization note */}
-            {resolution.synonymSource && queryChanged && (
-              <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-                Synonym expanded via {resolution.synonymSource}
-                {resolution.synonymSource === "hardcoded"
-                  ? " — ⚠ hardcoded fallback list (known limitation; see lib/resolver/synonyms.ts)"
-                  : ""}
-                .
-              </p>
+            {/* Evidence trail */}
+            {resolution.evidence.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide font-medium">
+                  Evidence
+                </p>
+                <ul className="space-y-0.5">
+                  {resolution.evidence.map((e, i) => (
+                    <li key={i} className="text-xs text-slate-400 dark:text-slate-500 italic">
+                      {e.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
 
             {/* HIGH tier — auto-applied banner */}
@@ -1418,7 +1397,7 @@ function QueryResolutionCard({
                     Normalized query auto-applied
                   </p>
                   <p className="text-xs text-emerald-600 dark:text-emerald-400">
-                    All modules searched &ldquo;{resolution.normalizedQuery}&rdquo; (HIGH confidence —
+                    All modules searched &ldquo;{normalizedLabel}&rdquo; (HIGH confidence —
                     no confirmation required).
                   </p>
                 </div>
@@ -1446,18 +1425,13 @@ function QueryResolutionCard({
                     Modules searched using your original query. Accept the suggestion
                     below to re-search with the normalized form.
                   </p>
-                  {resolution.notes && (
-                    <p className="text-xs text-amber-500 dark:text-amber-500 mt-1 italic">
-                      {resolution.notes}
-                    </p>
-                  )}
                 </div>
                 {queryChanged && (
                   <button
                     onClick={applyResolution}
                     className="shrink-0 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-full transition-colors"
                   >
-                    Apply &ldquo;{resolution.normalizedQuery}&rdquo;
+                    Apply &ldquo;{normalizedLabel}&rdquo;
                   </button>
                 )}
               </div>
@@ -1469,9 +1443,7 @@ function QueryResolutionCard({
       {/* Footer */}
       <div className="px-5 py-3 border-t border-amber-100 dark:border-amber-900/30">
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          Biological Query Resolution · Phase 5.1.5 ·{" "}
-          {resolution.resolutionPath ?? "unknown-path"} ·{" "}
-          {resolution.matchedProvider ?? "no provider"}
+          Biological Query Resolution · Phase R
         </p>
       </div>
     </div>
