@@ -1,0 +1,610 @@
+PHASE R — BIOLOGICAL QUERY RESOLVER & PIPELINE UNIFICATION
+(CRITICAL BUG FIX PHASE — supersedes prior "do not modify resolver" rule
+for the specific scope defined below)
+
+PROJECT CONTEXT — READ FIRST
+
+This repository is already updated to the latest GitHub commit. Pull
+latest before starting.
+
+--------------------------------------------------
+
+IMPLEMENTATION SAFETY
+
+Before modifying any source file:
+
+1. Create a new git checkpoint (commit or branch) so this phase can be
+   cleanly rolled back if needed.
+2. After completing each incremental step (A–G, per INCREMENTAL
+   IMPLEMENTATION REQUIREMENT below), run:
+   - TypeScript compilation
+   - Lint (if configured)
+   - Existing build
+   - Existing resolver tests (if present)
+3. If any step introduces a regression: fix it immediately before
+   proceeding. Never continue to the next lettered step with a broken
+   build.
+4. Do not rewrite working logic merely for architectural purity. Prefer
+   minimal, targeted changes that preserve existing behavior unless this
+   specification explicitly requires the change.
+5. Preserve all existing code comments unless they become factually
+   incorrect as a result of a change made in this phase.
+6. Never commit code that does not compile — this holds at every
+   lettered step, not just at the final commit.
+
+This is a BUG FIX AND ARCHITECTURE HARDENING phase, not a feature phase.
+Live testing surfaced a root-cause architectural defect. An initial
+codebase inspection (already performed) found that Transcript Explorer
+ALREADY uses GeneID as its lookup key — it does not re-search by raw
+symbol as originally suspected. This means the pipeline is further along
+than first assessed. The actual root cause is narrower and lives
+primarily in the resolver itself:
+- the resolver sometimes returns the wrong entity (organism overriding
+  gene, disease overriding gene, etc.)
+- the resolver does not always produce a stable GeneID
+- ambiguous queries are not handled with a consistent, structured
+  fallback
+
+SCOPE REFOCUS: this phase should focus primarily on the Biological Query
+Resolver (5.1.5). Downstream modules (Gene Explorer, Transcript Explorer,
+Protein Explorer) require only minimal changes — mainly to correctly
+consume the resolver's improved output and to add defensive invariants —
+not a rewrite of their existing fetch logic, which is largely already
+correct.
+
+DO NOT let the implementer make architectural decisions unilaterally.
+The design decisions below are final — proceed with them as specified,
+do not deviate or introduce alternative designs mid-implementation.
+
+Previously completed phases (do NOT rebuild their internals/UI — you ARE
+authorized to change how they receive their input query, per the scope
+below):
+- PubMed Explorer — NOT in scope, do not touch
+- GEO Explorer — NOT in scope, do not touch
+- Universal Pagination — NOT in scope, do not touch
+- Sequence Foundation (5.1) — IN SCOPE for Bug 11 only (see below)
+- Biological Query Resolver (5.1.5) — IN SCOPE, this is the primary fix
+- Gene Explorer (5.2) — IN SCOPE for input-consumption change only
+- Transcript Explorer (5.3A/B/C) — IN SCOPE for input-consumption change only
+- Protein Explorer (5.4A) — IN SCOPE for input-consumption change only
+- Organism-aware Gene Ranking — being superseded by this phase's
+  organism/TaxID normalization; do not maintain both systems
+
+Do NOT redesign any module's UI, card layout, styling, download
+mechanics, cache keys, or rate-limiting in this phase. The change is:
+what identifier each module receives and trusts, not how each module
+looks or downloads data once it has the correct identifier.
+
+--------------------------------------------------
+
+DESIGN DECISIONS — PROCEED WITH THESE (final, do not deviate)
+
+1. Replace QueryResolution with NormalizedQuery as the canonical resolver
+   output. Do not maintain two long-term resolution systems in parallel —
+   NormalizedQuery replaces the old output shape entirely once this phase
+   is complete.
+
+2. Refactor the resolver's internal flow from sequential early-return
+   (pick one entity and stop) into: multi-entity extraction (detect all
+   candidate entities independently) followed by a single merge stage
+   that produces one NormalizedQuery from whatever was extracted. Do not
+   keep the early-return pattern anywhere in the resolver.
+
+3. Add organism SUFFIX detection (e.g. "Trp53 Mus musculus" — organism
+   stated after the gene) while preserving the existing organism PREFIX
+   detection (e.g. "mouse Cd4" — organism stated before the gene). Both
+   patterns must be detected; neither replaces the other.
+
+4. Replace fixed confidence constants with evidence-based confidence
+   scoring derived from agreement between extracted entities (per the
+   Bug 6 fix and the `evidence` array already specified below).
+
+5. Do NOT introduce a mandatory extra MedGen/NCBI API call for every gene
+   query solely to detect disease context. Reuse the existing disease
+   resolution flow wherever practical, and preserve current rate-limit
+   behavior — no new per-query Entrez/MedGen calls beyond what the
+   resolver already makes today.
+
+6. Preserve existing downstream module APIs wherever practical. The
+   orchestrator consumes NormalizedQuery and derives the identifiers
+   required by Gene Explorer, Transcript Explorer, and Protein Explorer
+   — those modules' existing input shapes and fetch logic are not to be
+   rewritten, only correctly fed (per the loose-coupling architecture
+   note already specified below).
+
+7. Before modifying any file, create CURRENT-STATE-NOTES.md as specified
+   in FIRST ACTION below. Implement incrementally (see INCREMENTAL
+   IMPLEMENTATION REQUIREMENT below) — ensure TypeScript remains
+   buildable after each major change, not just at the very end.
+
+--------------------------------------------------
+
+INCREMENTAL IMPLEMENTATION REQUIREMENT
+
+Do NOT rewrite the entire resolver in one pass. Work in this order, and
+confirm TypeScript compiles successfully after each step before moving
+to the next:
+
+Step A: Create/update types (NormalizedQuery, CandidateResolution) —
+        confirm compiles.
+Step B: Refactor resolver's multi-entity extraction + merge stage
+        (Decisions 1, 2) — confirm compiles, confirm resolver still
+        returns a result for a simple known-good query (e.g. "TP53")
+        before proceeding.
+Step C: Add organism suffix detection alongside existing prefix
+        detection (Decision 3) — confirm compiles, test both directions.
+Step D: Implement evidence-based confidence scoring (Decision 4) —
+        confirm compiles.
+Step E: Wire disease-collision handling reusing the existing disease flow
+        (Decision 5, Bug 4/7 fixes) — confirm compiles.
+Step F: Update orchestrator (app/api/analyze/route.ts) to derive and pass
+        correct identifiers to each downstream module (Decision 6) —
+        confirm compiles, confirm existing TP53/BRCA1 queries still work
+        end-to-end before proceeding.
+Step G: Add the Pipeline Invariant / Identifier Immutability defensive
+        checks to Transcript Explorer and Protein Explorer as safeguards
+        (these modules' core fetch logic is not being rewritten — only
+        the defensive guard is added) — confirm compiles.
+
+If credits run low mid-sequence, stop at the end of the current lettered
+step (not mid-step), commit working code, and follow the CREDIT SAFETY
+RULE below.
+
+RECOMMENDED SESSION SPLIT
+
+This phase is large (likely 15–25 files touched across resolver and
+downstream integration points). Rather than expecting one long run to
+complete everything, this work is expected to span multiple sessions:
+- Session 1: Steps A–C (types, resolver refactor into multi-entity
+  extraction + merge, organism suffix detection)
+- Session 2: Steps D–F (evidence-based confidence scoring, disease
+  collision handling, orchestrator update)
+- Session 3: Step G (defensive invariants on Transcript/Protein
+  Explorer), full validation, regression testing, and final
+  documentation
+Each session should end with a compiling, committed checkpoint per
+IMPLEMENTATION SAFETY above — do not treat an interrupted session as a
+failure; treat the lettered step boundary as the natural stopping point.
+
+--------------------------------------------------
+
+FIRST ACTION — ESTABLISH CURRENT STATE
+
+Before writing any code:
+
+1. Read the resolver's current implementation and identify exactly what
+   it outputs today (single entity? string? object?).
+2. Read Gene Explorer, Transcript Explorer, and Protein Explorer's entry
+   points and identify, for each, what identifier they currently accept
+   as input (raw query string, gene symbol, GeneID, or something else).
+3. Write CURRENT-STATE-NOTES.md documenting exactly what you found for
+   each of the three modules above, before changing anything. This
+   confirms the root cause before you fix it.
+4. Do NOT re-read unrelated repository files (PubMed, GEO, Sequence
+   Foundation internals unrelated to Bug 11) once state is established.
+
+--------------------------------------------------
+
+ROOT CAUSE — WHY TRANSCRIPTS/PROTEINS GO MISSING
+
+A gene card rendering successfully does not guarantee downstream modules
+received a usable identifier. If the resolver returns only a gene symbol
+or an ambiguous match — not a resolved NCBI GeneID — the transcript
+module has no reliable key and effectively starts a new, less specific
+search. This is why Transcript Explorer can show "No transcript" and
+Protein Explorer can show "No protein" even when Gene Explorer displays a
+seemingly valid gene.
+
+The fix: the resolver becomes the single source of truth. It outputs one
+structured object. Every downstream module consumes that same object —
+none of them re-resolve the query independently.
+
+--------------------------------------------------
+
+FILE 1: types/normalized-query.ts
+
+Create NormalizedQuery interface:
+
+interface CandidateResolution {
+  gene: { symbol: string; geneId: string | null } | null;
+  organism: { name: string; taxId: string | null } | null;
+  confidence: number;
+}
+
+interface NormalizedQuery {
+  rawQuery: string;                    // original user input, always preserved
+  gene: {
+    symbol: string;
+    geneId: string | null;             // NCBI GeneID — the stable key
+    organismMatched: string | null;    // which organism this symbol was resolved for
+  } | null;
+  organism: {
+    name: string;                      // e.g. "Mus musculus"
+    taxId: string | null;
+    matchedSynonym: string | null;     // e.g. "mouse" -> "Mus musculus"
+  } | null;
+  disease: {
+    name: string;
+  } | null;
+  protein: {
+    accession: string;
+  } | null;
+  confidence: number;                  // derived from entity agreement, see rules below
+  candidates: CandidateResolution[] | null; // flat alternatives, never nested NormalizedQuery
+  ambiguous: boolean;
+  evidence: {
+    source: "ncbi-gene" | "medgen" | "taxonomy" | "synonym";
+    matchedValue: string;
+    reason: string;
+  }[];                                  // e.g. {source:"ncbi-gene", matchedValue:"TP53",
+                                         // reason:"Official gene symbol"} — records WHY
+                                         // each part of the resolution was made, for debugging
+}
+
+ARCHITECTURE NOTE — who consumes NormalizedQuery:
+Only app/api/analyze/route.ts (the orchestrator) consumes the full
+NormalizedQuery object directly. Each downstream module must NOT accept
+NormalizedQuery as its input type. Instead:
+- Gene Explorer accepts a resolved gene identifier (geneId if present,
+  else symbol+organism as fallback) — derived from NormalizedQuery.gene
+  by the orchestrator, then passed down as plain arguments/GeneRecord
+  input, exactly as it already does today.
+- Transcript Explorer accepts a geneId (from the resulting GeneRecord),
+  exactly as it already does today.
+- Protein Explorer accepts a proteinAccessionVersion (from the resulting
+  TranscriptRecord), exactly as it already does today, unchanged from
+  Phase 5.4A.
+This keeps every module loosely coupled and independently reusable — the
+resolver's output shape is the orchestrator's concern, not each module's.
+
+--------------------------------------------------
+
+FILE 2: Resolver changes (lib/resolver/ — locate existing files)
+
+Bug 1 & 3 fix — Multi-entity extraction:
+The resolver must extract ALL recognized entities from a single query,
+not just one. "Trp53 Mus musculus" must populate BOTH gene AND organism
+fields on the same NormalizedQuery — organism must never silently
+replace/discard gene.
+
+Bug 2 fix — Species-aware symbol resolution:
+Gene symbols are organism-specific (TP53 human, Trp53 mouse, Tp53 rat).
+When an organism is present in the query (explicit or inferred), resolve
+the gene symbol against THAT organism's gene database, not a
+default/generic one.
+
+Organism detection must handle BOTH directions — do not replace one with
+the other:
+- Prefix pattern (organism stated before gene): "mouse Cd4" — this
+  detection already exists and must be preserved.
+- Suffix pattern (organism stated after gene): "Trp53 Mus musculus" —
+  this detection must be added alongside the existing prefix detection.
+Both patterns feed the same multi-entity extraction stage (Decision 2).
+
+Bug 4 fix — Gene vs Disease priority (NO hardcoded gene list, NO
+hardcoded disease keyword list):
+This rule applies ONLY to the collision case — when a bare query string
+matches BOTH a valid gene symbol for a recognized organism AND a disease
+entity (e.g. "tp53" also matching a "TP53 polymorphism" disease entry).
+In that specific collision case, prefer gene.symbol only when the query
+consists solely of a recognized gene symbol with no additional
+disease-specific context — e.g. "TP53" alone should resolve to gene, but
+"TP53 mutation" or "TP53 polymorphism" should still allow disease.name
+to populate alongside (or instead of) gene, since the query itself
+carries disease-specific context beyond the bare symbol.
+
+Do NOT detect "disease context" using a hardcoded keyword list (e.g.
+"syndrome", "cancer", "disease"). That has the same maintainability flaw
+as a hardcoded gene list. Instead, reuse the resolver's existing disease
+classification/recognition logic (already built in 5.1.5 to support
+disease queries generally) to determine whether the query contains a
+genuine disease entity alongside the gene symbol. Do NOT introduce a new
+mandatory MedGen/NCBI API call for every gene query solely to check for
+disease context (per Decision 5 above) — this must reuse the existing
+disease resolution flow and preserve current rate-limit behavior; no new
+per-query Entrez/MedGen calls beyond what the resolver already makes
+today. If the existing disease classifier finds no gene-symbol collision,
+disease queries are handled exactly as they already are today — this
+rule does not change disease resolution for non-colliding queries (e.g.
+"hepatitis", "malaria", "diabetes") at all.
+
+--------------------------------------------------
+
+IDENTIFIER PRECEDENCE (applies across resolver and all modules)
+
+When multiple identifier types are available for the same gene, always
+prefer the highest-quality identifier in this order:
+1. NCBI GeneID (most stable — always preferred when available)
+2. RefSeq accession (e.g. NM_/NP_ accession, when GeneID is unavailable)
+3. Ensembl Gene ID
+4. Official gene symbol (organism-qualified)
+5. Synonym / alternate symbol
+6. Free text (last resort — lowest confidence)
+Every module must use the highest-precedence identifier it has been
+given, never falling back to a lower-precedence one when a
+higher-precedence one is already available in the chain.
+
+IDENTIFIER IMMUTABILITY RULE:
+Once the resolver has produced a GeneID for the active pipeline, no
+downstream module (Gene Explorer, Transcript Explorer, Protein Explorer,
+Sequence Foundation, or any future module) may replace that GeneID with a
+different identifier or perform an alternate resolution — unless the
+resolver explicitly marked the query as ambiguous and a different
+candidate is intentionally selected by the user. Downstream modules may
+enrich the record with additional identifiers (RefSeq accession, Ensembl
+ID, UniProt ID, etc.) but must never change the canonical GeneID
+established by the resolver.
+
+--------------------------------------------------
+
+Bug 5 fix — Ambiguity (scoped down from original suggestion):
+When multiple plausible interpretations exist with comparable confidence
+(e.g. "BARC" matching multiple genes/organisms), populate the
+`candidates` array and set `ambiguous: true`. Do NOT build a "did you
+mean" disambiguation UI in this phase — this was previously and
+deliberately deferred (see Phase 5.2 "Query Normalization" notes). The
+resolver should surface the data; picking a default (highest-confidence)
+candidate to proceed with, while making `candidates` available for a
+future UI, is sufficient for this phase.
+
+Bug 6 fix — Confidence scoring:
+Confidence must be derived from resolver evidence and agreement between
+entities — e.g. higher when a gene symbol is confirmed valid for the
+stated/inferred organism, lower when entities are unconfirmed or
+conflict. Do not hardcode fixed thresholds (e.g. "always 0.8" or "always
+0.98"); the score should scale with how much evidence agrees, determined
+algorithmically rather than fixed per query type.
+
+Bug 7 fix — Context preservation:
+"TP53 breast cancer" must populate BOTH gene.symbol = "TP53" AND
+disease.name = "Breast Cancer" — not one or the other. This relies on
+the same existing disease classifier referenced in the Bug 4 fix above,
+running alongside gene detection rather than instead of it.
+
+Bug 8 fix — Never silently discard the original query:
+`rawQuery` is always preserved on every NormalizedQuery, unmodified,
+regardless of what entities were or weren't extracted.
+
+Bug 13 fix — Organism synonym normalization:
+Normalize common synonyms to TaxID: "mouse"/"house mouse"/"Mus musculus"
+→ taxId 10090; "human"/"man"/"Homo sapiens" → taxId 9606; and the other
+organisms already supported (rat, zebrafish, fly, worm, yeast,
+arabidopsis, chicken). Maintain this as a lookup table, not inline
+string matching scattered through the code.
+
+--------------------------------------------------
+
+FILE 3-5: Downstream module consumption changes
+
+INTEGRATION 1 — Gene Explorer (5.2):
+Must accept a resolved gene identifier derived by the orchestrator from
+NormalizedQuery.gene — geneId as primary lookup key if already present,
+falling back to symbol+organism only if geneId is null. Gene Explorer's
+input type does NOT become NormalizedQuery; it continues to accept the
+identifier shape it already accepts today, just sourced correctly now.
+
+INTEGRATION 2 — Transcript Explorer (5.3):
+Codebase inspection found Transcript Explorer already uses GeneID as its
+lookup key today — it does NOT currently re-search by raw symbol. This
+integration step is therefore verification plus a defensive guard, not a
+rewrite: confirm the GeneID it receives is the orchestrator-derived one
+from NormalizedQuery.gene.geneId (not an independently resolved one), and
+add the Pipeline Invariant below as a permanent safeguard against this
+regressing in a future phase.
+
+PIPELINE INVARIANT (must hold for all future phases, not just this one):
+Transcript Explorer MUST NOT execute unless a resolved NCBI GeneID is
+available. If the resolver cannot produce a GeneID, Transcript Explorer
+must return a structured "Resolution Required" state rather than
+attempting a fallback search by raw symbol or free text. This prevents
+silent mismatches and guarantees identifier consistency throughout the
+pipeline — it also prevents a future developer from accidentally
+reintroducing raw-symbol fallback searches when extending this module
+later.
+
+INTEGRATION 3 — Protein Explorer (5.4A):
+Must continue to receive its proteinAccessionVersion from
+TranscriptRecord as already designed (unchanged from Phase 5.4A) — but
+confirm that chain is now unbroken end-to-end: NormalizedQuery.gene.geneId
+→ GeneRecord → TranscriptRecord.proteinAccession → ProteinRecord. No
+independent resolution at any step. Protein Explorer's input type is
+unaffected by this phase.
+
+INTEGRATION 4 — app/api/analyze/route.ts:
+This is the ONLY place NormalizedQuery is consumed directly. The
+orchestrator derives the correct identifier for each module from
+NormalizedQuery and passes that derived identifier down — it does not
+pass the NormalizedQuery object itself into Gene/Transcript/Protein
+Explorer.
+
+Bug 10 fix is satisfied when all of the above is true: one resolved
+object at the orchestrator level, correct identifiers derived from it and
+passed to each module in the shape that module already expects, with no
+independent re-resolution anywhere in the chain.
+
+--------------------------------------------------
+
+MULTI-GENE LAZY LOADING (explicit constraint for Bug 12)
+
+Transcript and protein fetches must only occur after the user selects a
+specific GeneID from a multi-gene result list. Do not prefetch
+transcripts or proteins for any gene in the list before selection —
+this significantly reduces unnecessary NCBI calls for ambiguous
+multi-result queries (e.g. "BRCA" → 10 genes).
+
+--------------------------------------------------
+
+RESOLVER DEBUG LOG (required)
+
+The resolver must produce a debug log entry for every resolution,
+capturing the decision trail:
+  rawQuery → entities detected → organism chosen → GeneID resolved →
+  confidence → reason for the final choice (e.g. "gene preferred over
+  disease: no disease-specific context found beyond bare symbol")
+This log is for developer debugging (console/server log), not user-facing
+UI. It must be present for every query processed during validation below,
+and included in the final report as evidence.
+
+--------------------------------------------------
+
+FILE 6: Sequence Foundation (5.1) — Bug 11 (DEFERRED beyond minimal scope)
+
+Current behavior returns a single accession (e.g. NG_017013) for a
+sequence-style query. Full expansion to genome + transcript + protein +
+assembly accessions in one response is NOT realistic in this phase — many
+NCBI records do not expose every accession type in a single response
+without additional independent Entrez calls, which would violate the
+rate-limit-conscious design established elsewhere in this app.
+
+Minimal scope for this phase: if the resolved GeneID chain (from this
+phase's fix) already has transcript/protein accessions available from
+data already fetched for Gene/Transcript Explorer, surface those as
+supplementary info on the Sequence Foundation result — but do NOT add
+new independent Entrez calls to chase down every accession type. Full
+multi-accession expansion is postponed to a future phase, after the
+resolver refactor is validated and stable.
+
+--------------------------------------------------
+
+IMPORTANT CONSTRAINTS
+
+Do NOT modify: Python FastAPI, Redis, Cache, Rate Limiter, Retry Logic,
+ModuleResult, Universal Exploration Framework, PubMed, GEO, AI-generated
+sections, any module's UI styling/card layout/download mechanics.
+
+Do NOT implement in this phase: a "did you mean" disambiguation UI
+(Bug 5 — scoped down, see above), any new external database integrations
+(Pfam/InterPro/AlphaFold/etc.), any new rate limiter/cache system.
+
+Do NOT hardcode a "famous gene" list anywhere (Bug 4).
+
+Do NOT maintain both the old organism-aware ranking patch AND the new
+TaxID normalization system in parallel — the new system replaces it.
+
+--------------------------------------------------
+
+VALIDATION (report representative evidence — not "works", but also not
+every full object verbatim; keep this efficient so context is spent on
+implementation, not report-writing)
+
+For each query below, include representative evidence (key fields only —
+gene.symbol, gene.geneId, organism.name/taxId, disease.name, confidence,
+and the debug-log reason) and confirm Gene Explorer, Transcript Explorer,
+and Protein Explorer all return real data (not empty states) when a gene
+is present. Attach the full resolver debug log for all queries as a
+separate log rather than pasting every full NormalizedQuery object inline
+in the report.
+
+1. "Trp53 Mus musculus" → confirm gene.symbol="Trp53", gene.geneId
+   populated, organism.name="Mus musculus", organism.taxId="10090",
+   confidence ≥0.9. Confirm Transcript Explorer shows real transcripts
+   (not "No transcript") and Protein Explorer shows real proteins.
+
+2. "TP53" (bare symbol) → confirm gene.symbol="TP53" is selected over
+   any disease interpretation, disease=null, confidence high.
+
+3. "TP53 breast cancer" → confirm BOTH gene.symbol="TP53" AND
+   disease.name is populated ("Breast Cancer" or equivalent) —
+   neither field is null.
+
+4. "BRCA2 human" → confirm gene.symbol="BRCA2", organism.name="Homo
+   sapiens", rawQuery field still contains the full original string
+   "BRCA2 human" unmodified.
+
+5. "mouse Cd4" → confirm organism.matchedSynonym="mouse" resolved to
+   organism.name="Mus musculus", organism.taxId="10090".
+
+6. "BARC" (ambiguous) → confirm candidates array is populated with more
+   than one entry, ambiguous=true, and a reasonable default is still
+   selected so the app does not stall.
+
+7. "BRCA" (multi-gene) → confirm gene list renders without eagerly
+   fetching transcripts/proteins for all results; select one gene and
+   confirm transcripts/proteins then load for that gene only.
+
+8. "Hepatitis" (plain disease query, no gene-symbol collision) → confirm
+   gene=null, disease.name populated ("Hepatitis" or the classifier's
+   normalized form), and that this result is unaffected by the Bug 4
+   collision-priority rule — i.e. confirm disease resolution here behaves
+   exactly as it did before this phase's changes. Repeat with one more
+   non-colliding disease query (e.g. "malaria" or "diabetes") to confirm
+   the fix didn't regress general disease handling.
+
+9. "p53" (gene synonym, not the official symbol) → confirm gene.symbol
+   resolves to "TP53", gene.geneId populated with GeneID 7157 (or the
+   current correct value), demonstrating synonym resolution works, not
+   just exact official-symbol matches.
+
+10. "Cd4 human" vs "Cd4 mouse" → confirm these resolve to DIFFERENT
+    GeneIDs (species-specific resolution), each with the correct
+    organism.taxId, proving the species-aware fix (Bugs 2/3) actually
+    works rather than defaulting to one organism regardless of context.
+
+--------------------------------------------------
+
+REGRESSION TESTING (with actual evidence)
+
+- PubMed: "TP53" paper count unchanged
+- GEO: "TP53" dataset count unchanged
+- Gene Explorer: "TP53" (human, unambiguous) — confirm Gene ID,
+  chromosome still correct
+- Transcript Explorer: "TP53" — confirm MANE Select accession still
+  correct, FASTA/CDS downloads still work
+- Protein Explorer: "TP53" MANE transcript — confirm canonical protein
+  (NP_000537.3) still resolves and FASTA download still works
+- No TypeScript errors
+- No Python files modified
+- No AI-generated sections modified
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits are exhausted before this phase is complete:
+1. Finish the current file — never leave a syntactically broken file.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit only working code, even if incomplete in scope.
+4. Write PHASE-R-PARTIAL-REPORT.md containing: completed work, remaining
+   work, files modified, and the exact next implementation step.
+
+--------------------------------------------------
+
+END STATE DOCUMENTATION (required — this becomes the new entry point for
+all future phases)
+
+Write PHASE-R-FINAL-REPORT.md, written as if the reader has never seen
+this conversation:
+
+1. NormalizedQuery interface — final fields and types as implemented
+2. Exact file paths created or modified
+3. Confirm end-to-end identifier flow: resolver → GeneID → TranscriptRecord
+   → ProteinRecord, with no independent re-resolution at any step
+4. Confidence scoring rules as implemented
+5. Organism synonym → TaxID table as implemented
+6. Known limitations — document explicitly (e.g. any organism/gene
+   combinations still unresolved, any queries still falling back to
+   ambiguous handling incorrectly)
+7. Validation results per the Validation section above — representative
+   key-field evidence and actual downstream results shown, with the full
+   resolver debug log attached separately (not pasted verbatim inline)
+8. Regression results with actual evidence
+9. Confirm no "did you mean" UI was built (deferred), no hardcoded gene
+   list exists, no duplicate organism-ranking system remains
+
+--------------------------------------------------
+
+FINAL REPORT
+
+Confirm: root cause (independent per-module resolution) is fully fixed,
+all 7 validation queries produce correct structured output and correct
+downstream data, all regressions pass, no Python changes, no AI changes,
+app fully stable and runnable at end of this phase.
+
+STOP. Do NOT implement Bug 5's disambiguation UI, Bug 11's full
+multi-accession Sequence Foundation expansion (deferred to a future
+phase per the scoped-down FILE 6 section above), or any Phase 5.4B/5.6+
+scope in this phase.
+Commit all implementation changes together with PHASE-R-FINAL-REPORT.md
+only after TypeScript passes and the validation checklist above completes
+successfully.
+Do not commit broken code.

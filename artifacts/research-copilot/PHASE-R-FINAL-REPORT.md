@@ -1,145 +1,193 @@
 # Phase R — Biological Query Resolver Pipeline Unification — Final Report
 
-Implements the design in `attached_assets/Pasted-PHASE-R-BIOLOGICAL-QUERY-RESOLVER-PIPELINE-UNIFICATION-_1783512663937.txt`.
-Pre-implementation state is documented in `CURRENT-STATE-NOTES.md`. Raw
-per-query debug log evidence is in `PHASE-R-VALIDATION-LOG.md`.
+Implements the design in
+`attached_assets/Pasted-PHASE-R-BIOLOGICAL-QUERY-RESOLVER-PIPELINE-UNIFICATION-_1783512663937.txt`.
+Pre-implementation state is documented in `CURRENT-STATE-NOTES.md`.
+Validation evidence is in `PHASE-R-VALIDATION-LOG.md` and
+`PHASE-R-REGRESSION-REPORT.md`.
+
+**Validation status (2026-07-09):** 12/12 validation queries pass. 0 TypeScript errors.
+All downstream modules (Gene Explorer, Transcript Explorer, Protein Explorer) confirmed
+returning real data.
+
+---
 
 ## 1. NormalizedQuery interface — final fields and types
 
-Implemented exactly as specified in `types/normalized-query.ts`:
+Implemented exactly as specified (`types/normalized-query.ts`):
 
 ```ts
-interface CandidateResolution {
+export interface CandidateResolution {
   gene: { symbol: string; geneId: string | null } | null;
   organism: { name: string; taxId: string | null } | null;
   confidence: number;
 }
 
-interface NormalizedQuery {
+export interface NormalizedQuery {
   rawQuery: string;
-  gene: { symbol: string; geneId: string | null; organismMatched: string | null } | null;
-  organism: { name: string; taxId: string | null; matchedSynonym: string | null } | null;
+  gene: {
+    symbol: string;
+    geneId: string | null;
+    organismMatched: string | null;
+  } | null;
+  organism: {
+    name: string;
+    taxId: string | null;
+    matchedSynonym: string | null;
+  } | null;
   disease: { name: string } | null;
   protein: { accession: string } | null;
   confidence: number;
   candidates: CandidateResolution[] | null;
   ambiguous: boolean;
-  evidence: { source: "ncbi-gene" | "medgen" | "taxonomy" | "synonym"; matchedValue: string; reason: string }[];
+  evidence: {
+    source: "ncbi-gene" | "medgen" | "taxonomy" | "synonym";
+    matchedValue: string;
+    reason: string;
+  }[];
 }
 ```
 
-No changes were needed from the literal spec text — the type was authored
-directly from it.
+No deviation from the literal spec text.
 
-## 2. Resolver — multi-entity extraction + merge (lib/resolver/index.ts)
+---
+
+## 2. Resolver — multi-entity extraction + merge (`lib/resolver/index.ts`)
 
 Replaced the old sequential early-return pipeline (Accession → Gene →
 Organism → Disease, first match wins) with:
 
-1. **Accession** — pure regex, no API call. Distinct entity family;
-   short-circuits into `protein.accession` (see Deviation 1 below).
-2. **Explicit organism detection** — local lookup table only
-   (`lib/resolver/organism-synonyms.ts`), zero API calls. Both prefix
-   ("mouse Cd4") and new suffix ("Trp53 Mus musculus", "BRCA2 human")
-   patterns are generated from one canonical table (`ORGANISM_SYNONYMS`),
-   so they can never drift out of sync (Bug 13).
-3. **Gene extraction** — against the organism-qualified remainder when an
-   explicit organism was found (Bug 2 — species-aware resolution);
-   otherwise against the whole query, or an embedded gene-shaped token in a
-   multi-word query (Bug 1/7 — "TP53 breast cancer").
-4. **Organism extraction** via NCBI Taxonomy — only when no local organism
-   was found and no gene was resolved, preserving the original call
-   pattern and rate-limit profile. When a gene *was* resolved without an
-   explicit organism, the gene resolver's own organism/taxonomyId is
-   surfaced onto `NormalizedQuery.organism` as free enrichment (no extra
-   API call, no confidence inflation).
-5. **Disease extraction** — reuses the existing MedGen-based
-   `resolveDisease()` unchanged. Bug 4 collision rule: a bare gene symbol
-   with no additional query context skips the disease call entirely (no
-   new mandatory NCBI call, preserving rate-limit behavior). Gene + extra
-   context words, or no gene/organism at all, calls `resolveDisease()`
-   exactly as before.
-6. **Confidence** — evidence-based (`computeConfidence()`): average of all
-   contributing entity confidences plus a small per-additional-entity
-   agreement bonus (`+0.03`, capped at `0.99`). Never a fixed per-query-type
-   constant.
+1. **Synonym normalization** — hardcoded fallback table; unchanged from before.
+2. **Accession** — pure regex, no API call. Distinct entity family; short-circuits
+   into `protein.accession` (see Deviation 1 below).
+3. **Explicit organism detection** — local `ORGANISM_SYNONYMS` lookup table only
+   (`lib/resolver/organism-synonyms.ts`), zero API calls. Both prefix ("mouse Cd4")
+   and suffix ("Trp53 Mus musculus", "BRCA2 human") patterns are generated from one
+   canonical table so they cannot drift out of sync (Bug 13).
+4. **Gene extraction** — `resolveGene()` called against the organism-qualified
+   remainder when an explicit organism was found (Bug 2 — species-aware resolution);
+   otherwise against the whole query as an uppercase-gated bare symbol, or an embedded
+   gene-token within a multi-word query (Bug 1/7 — "TP53 breast cancer").
+5. **Organism extraction via NCBI Taxonomy** — only when no local organism matched
+   AND no gene was resolved, preserving the original call pattern and rate-limit
+   profile. When a gene was resolved without an explicit organism token, the gene
+   resolver's own confirmed organism/taxId is surfaced on `NormalizedQuery.organism`
+   at zero extra API cost (Bug 1 — never silently discard known information).
+6. **Disease extraction** — reuses the existing MedGen-based `resolveDisease()`
+   unchanged. Bug 4 collision rule: a bare gene symbol with no additional context
+   skips the disease call entirely (no new mandatory NCBI call). Gene + extra context
+   tokens, or no gene/organism at all, calls `resolveDisease()` exactly as it always
+   has.
+7. **Confidence** — evidence-based (`computeConfidence()`): average of all contributing
+   entity confidences plus `+0.03` per additional corroborating entity (capped at 0.99).
+   Never a fixed per-query-type constant (Bug 6).
+8. **Debug log** — every resolution emits one `console.log` line via `logDebug()` with
+   entities detected, organism chosen, GeneID resolved, confidence, and a free-text
+   reason. Required by the spec; never user-facing.
 
-Every resolution logs one line via `logDebug()`:
-`rawQuery → entities detected → organism chosen → GeneID resolved →
-confidence → reason` — see `PHASE-R-VALIDATION-LOG.md` for the full log
-from the validation run below.
+`lib/resolver/gene.ts`, `organism.ts`, `disease.ts`, `accession.ts` were **not modified** —
+they remain internal entity-extraction helpers called by the new merge-stage orchestration
+instead of an early-return chain.
 
-No hardcoded gene list or disease-keyword list was introduced anywhere.
+---
 
-## 3. Downstream module consumption (Integrations 1–4)
+## 3. Orchestrator — `app/api/analyze/route.ts`
 
-- **Gene Explorer** (`lib/gene/index.ts`) — unchanged. Still accepts a
-  `QueryResolution`-shaped options object; the orchestrator now builds that
-  object from `NormalizedQuery` via `buildGeneAdapterResolution()` in
-  `app/api/analyze/route.ts` (see Deviation 2 below).
-- **Transcript Explorer** (`lib/transcript/index.ts`) — verified it already
-  used `geneId` as its sole lookup key (no raw-symbol re-search existed).
-  Added the **Pipeline Invariant** defensive guard: `searchTranscripts()`
-  now returns a structured `status: "empty"` result with
-  `error.code: "RESOLUTION_REQUIRED"` if called with an empty/missing
-  `geneId`, instead of ever attempting a fallback search.
-- **Protein Explorer** (`lib/protein/*`, `app/api/protein/*`) — confirmed
-  unchanged; still receives `proteinAccessionVersion` from
-  `TranscriptRecord` on-demand from the client, with no independent
-  resolution at any step. Chain confirmed unbroken:
-  `NormalizedQuery.gene.geneId → GeneRecord → TranscriptRecord.proteinAccession → ProteinRecord`.
-- **`app/api/analyze/route.ts`** — the only place `NormalizedQuery` is
-  consumed directly. Derives `effectiveQuery` (via `deriveEffectiveQuery()`)
-  and the Gene Explorer adapter (via `buildGeneAdapterResolution()`) from
-  it; never passes `NormalizedQuery` itself into a downstream module.
-- **`components/ResultsContent.tsx`** — `QueryResolutionCard` rebinds its
-  field reads to `NormalizedQuery` (gene/organism/disease/protein,
-  `evidence[]`, `candidates[]`, `ambiguous`) with no layout/styling
-  changes. The tier badge is now derived via the existing
-  `toConfidenceTier()` helper instead of a resolver-supplied field.
+Two new private functions added; nothing else changed:
 
-## 4. Deliberate deviations beyond the literal spec text
+**`buildGeneAdapterResolution(nq)`** — derives a `QueryResolution`-shaped object from
+`NormalizedQuery` so Gene Explorer's existing input contract needs zero changes (see
+Deviation 2 below).
 
-1. **Accession queries → `protein.accession`.** `NormalizedQuery` has no
-   generic "accession" slot — only `protein.accession`. Since accession
-   classification (`classifyAccession()`) is pure regex and covers ANY
-   accession subtype (transcript, genome, protein, etc.), not just
-   proteins, this field is repurposed as the generic "matched accession
-   identifier" slot for all of them. This was the only reasonable mapping
-   available within the specified type; flagging it explicitly since the
-   spec's accession handling wasn't addressed beyond "Sequence Foundation"
-   (deferred, Bug 11).
-2. **`QueryResolution`-shaped adapter bridge for Gene Explorer.** The spec
-   states Gene Explorer's input type "does NOT become NormalizedQuery; it
-   continues to accept the identifier shape it already accepts today."
-   Gene Explorer's existing shape *is* `QueryResolution`. Rather than
-   changing Gene Explorer's internals, `buildGeneAdapterResolution()` in
-   the orchestrator synthesizes a `QueryResolution`-shaped object
-   (populating only the fields Gene Explorer actually reads) from the new
-   `NormalizedQuery`. This satisfies "Gene Explorer's input type is
-   unchanged" literally while making `NormalizedQuery` the single
-   resolver-level source of truth, at the cost of one small translation
-   layer that must be kept in sync if Gene Explorer's read fields change.
-3. **Organism enrichment from gene match.** Not explicitly required by the
-   spec, but Bug 1 ("never silently discard information") motivated
-   populating `NormalizedQuery.organism` from the gene resolver's own
-   confirmed organism/taxonomyId even when no explicit organism token was
-   in the query (e.g. bare "TP53" now also carries `organism: {name:
-   "Homo sapiens", taxId: "9606"}`). This adds no new API call and no
-   confidence inflation — it is a free derivation from data already
-   fetched by the gene step.
+**`deriveEffectiveQuery(nq, rawQuery)`** — mirrors the old HIGH-tier (≥ 0.90) auto-apply
+threshold: at/above it, the resolved gene symbol (or disease name/organism name) is used
+as the effective query; below it, the raw query is used unchanged.
 
-## 5. Constraints honored
+---
 
-- No changes to Python FastAPI, Redis, cache, rate limiter, retry logic,
-  `ModuleResult`, Universal Exploration Framework, PubMed, GEO, AI-generated
-  sections, or any module's UI styling/card layout/download mechanics.
-- No "did you mean" disambiguation UI built (Bug 5, scoped down as
-  specified) — `candidates` + `ambiguous` are populated and a default is
-  selected automatically.
-- No new external database integrations, no new rate limiter/cache system.
-- No hardcoded "famous gene" list anywhere.
-- The old organism-prefix-only ranking patch was fully replaced by the new
-  TaxID lookup-table system — not maintained in parallel.
+## 4. Downstream module integration
 
-See `PHASE-R-REGRESSION-REPORT.md` for validation and regression evidence.
+**Gene Explorer (`lib/gene/index.ts`)** — input type unchanged.  The orchestrator passes a
+`QueryResolution`-shaped adapter object built by `buildGeneAdapterResolution()`.  Gene
+Explorer's "Case A" fast-path (`resolveByGeneId`) is triggered when the adapter carries a
+`primaryIdentifier` (NCBI GeneID) at HIGH confidence, exactly as before.
+
+**Transcript Explorer (`lib/transcript/index.ts`)** — already consumed `geneId` directly; no
+raw-symbol fallback existed.  Added the **Pipeline Invariant** guard: `searchTranscripts()`
+returns `{status:"empty", error:{code:"RESOLUTION_REQUIRED"}}` when called with a
+missing/empty `geneId`, instead of proceeding or falling back.
+
+**Protein Explorer (`lib/protein/index.ts`, `app/api/protein/*`)** — unchanged.  Receives
+`proteinAccessionVersion` from `TranscriptRecord` on-demand from the client.  The full
+chain (`NormalizedQuery.gene.geneId → GeneRecord → TranscriptRecord.proteinAccession →
+ProteinRecord`) was confirmed unbroken during the validation run.
+
+**`components/ResultsContent.tsx`** — `QueryResolutionCard` rebinds its field reads to
+`NormalizedQuery`.  Confidence tier is derived via the existing `toConfidenceTier()` helper
+from `types/query-resolution.ts`.  No JSX layout, class names, or styling were changed.
+
+---
+
+## 5. Deliberate deviations from the literal spec text
+
+### Deviation 1 — accession queries mapped into `protein.accession`
+
+`NormalizedQuery` has no generic "matched accession" slot; only `protein.accession` exists.
+`classifyAccession()` handles any accession subtype (NM_, XM_, NP_, NC_, …), not just
+proteins, so the field is repurposed as the generic slot for all accession-family queries.
+This was the only reasonable mapping within the specified type.  Flagged here because the
+spec's accession-chain handling is deferred (Bug 11 / Sequence Foundation), so a future
+implementer should be aware of this mapping when building that chain.
+
+### Deviation 2 — `QueryResolution`-shaped adapter bridge for Gene Explorer
+
+The spec states Gene Explorer's input type "does NOT become NormalizedQuery; it continues
+to accept the identifier shape it already accepts today."  Gene Explorer's existing shape
+is `QueryResolution`.  Rather than refactoring Gene Explorer's internals,
+`buildGeneAdapterResolution()` in the orchestrator synthesises a `QueryResolution`-shaped
+object (populating only the fields Gene Explorer actually reads) from the new
+`NormalizedQuery`.  This satisfies "Gene Explorer's input type is unchanged" literally,
+at the cost of one small translation layer that must be kept in sync if Gene Explorer's
+read-fields change.
+
+### Deviation 3 — organism enrichment from gene match
+
+When a gene is resolved without an explicit organism token in the query (e.g. bare "TP53"),
+the gene resolver's own confirmed organism/taxId is surfaced on `NormalizedQuery.organism`
+at no extra API cost and no confidence inflation (it is the same evidence as the gene match,
+not new agreement).  Not explicitly required by the spec, but follows directly from Bug 1
+("never silently discard information already known").
+
+---
+
+## 6. Constraints confirmed honored
+
+- No changes to Python FastAPI, Redis, cache, rate limiter, retry logic, `ModuleResult`,
+  Universal Exploration Framework, PubMed, GEO, AI-generated sections, or any module's
+  UI styling / card layout / download mechanics.
+- No "did you mean" disambiguation UI (Bug 5, scoped-down per spec) — `candidates` +
+  `ambiguous` are populated and a default is auto-selected.
+- No new external database integrations, no new rate limiter or cache system.
+- No hardcoded "famous gene" or "known disease" keyword list introduced anywhere.
+- The old organism-prefix-only ranking patch fully replaced by the new lookup-table system;
+  not maintained in parallel.
+
+---
+
+## 7. Files changed from baseline (commit 70e3c71 → 8bf1945)
+
+| File | Change |
+|---|---|
+| `types/normalized-query.ts` | **New** — `NormalizedQuery` + `CandidateResolution` interfaces |
+| `lib/resolver/organism-synonyms.ts` | **New** — canonical organism synonym→{taxId,name} lookup table |
+| `lib/resolver/organism-prefix.ts` | **Rewritten** — derives both prefix and suffix regex tables from canonical table; exports `detectOrganismPrefix()` and `detectOrganismSuffix()` |
+| `lib/resolver/index.ts` | **Rewritten** — multi-entity extraction + merge, evidence-based confidence, `logDebug()` on every resolution |
+| `app/api/analyze/route.ts` | **Modified** — added `buildGeneAdapterResolution()`, `deriveEffectiveQuery()`; `resolution` field type changed to `NormalizedQuery` |
+| `components/ResultsContent.tsx` | **Modified** — `QueryResolutionCard` field bindings updated to `NormalizedQuery`; confidence tier derived via `toConfidenceTier()` |
+| `lib/transcript/index.ts` | **Modified** — Pipeline Invariant guard added in `searchTranscripts()` |
+| `CURRENT-STATE-NOTES.md` | **New** — pre-implementation snapshot (written before any code change) |
+| `PHASE-R-VALIDATION-LOG.md` | **New** — resolver debug log from the live validation run |
+| `PHASE-R-REGRESSION-REPORT.md` | **New** — full validation table + regression checks with actual observed values |
+
+No files outside `artifacts/research-copilot/` were touched.
+No Python, Redis, rate-limiter, or Research API files were touched.

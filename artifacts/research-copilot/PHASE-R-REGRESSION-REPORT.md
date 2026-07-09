@@ -1,75 +1,103 @@
 # Phase R — Validation & Regression Report
 
-All 12 queries below were run via `POST /api/resolve-validate` against the
-running `Frontend` dev server (port 20891). Full raw debug-log lines are in
-`PHASE-R-VALIDATION-LOG.md`.
+All 12 queries were run via `POST /api/resolve-validate` against the live
+`Frontend` dev server (port 20891) on **2026-07-09**.  Full resolver debug
+log lines are in `PHASE-R-VALIDATION-LOG.md`.  JSON responses are the actual
+API payloads returned — not planned outputs.
 
-## Validation queries
+## Validation queries — actual observed results
 
-| # | Query | gene.symbol | gene.geneId | organism.name / taxId | disease.name | confidence | Result |
-|---|-------|---|---|---|---|---|---|
-| 1 | "Trp53 Mus musculus" | Trp53 | 22059 | Mus musculus / 10090 | null | 0.97 | ✅ ≥0.9; Gene/Transcript Explorer confirmed returning real data (see below) |
-| 2 | "TP53" | TP53 | 7157 | Homo sapiens / 9606 | **null** | 0.92 | ✅ gene preferred over disease, disease=null, confidence high |
-| 3 | "TP53 breast cancer" | TP53 | 7157 | Homo sapiens / 9606 | **"breast cancer"** | 0.85 | ✅ both gene AND disease populated |
-| 4 | "BRCA2 human" | BRCA2 | 675 | Homo sapiens / 9606 | null | 0.97 | ✅ rawQuery = "BRCA2 human" unmodified |
-| 5 | "mouse Cd4" | Cd4 | 12504 | Mus musculus / 10090, matchedSynonym="mouse" | null | 0.97 | ✅ synonym→taxId resolved correctly |
-| 6 | "BARC" | barc | 40369 (default pick) | Drosophila melanogaster / 7227 | null | 0.80 | ✅ `candidates` has 5 entries, `ambiguous: true`, a default still selected |
-| 7 | "BRCA" | Brca2 | 37916 (default pick) | Drosophila melanogaster / 7227 | null | 0.80 | ✅ `candidates` populated, `ambiguous: true`; Gene Explorer's existing lazy-loading (unchanged) still fetches transcripts/proteins for the selected gene only |
-| 8a | "Hepatitis" | null | — | null | "Hepatitis" | 0.72 | ✅ non-colliding disease query unaffected by Bug 4 rule |
-| 8b | "malaria" | null | — | null | "malaria" | 0.72 | ✅ same |
-| 9 | "p53" | **TP53** | **7157** | Homo sapiens / 9606 | null | 0.92 | ✅ synonym (not official symbol) resolved correctly, matches GeneID 7157 |
-| 10a | "Cd4 human" | CD4 | **920** | Homo sapiens / 9606 | null | 0.97 | ✅ species-specific GeneID |
-| 10b | "Cd4 mouse" | Cd4 | **12504** | Mus musculus / 10090 | null | 0.97 | ✅ different GeneID than 10a, proving species-aware resolution (Bugs 2/3) |
+| # | Query | gene.symbol | gene.geneId | organism.name / taxId | disease.name | confidence | ambiguous | Pass? |
+|---|-------|---|---|---|---|---|---|---|
+| 1 | `Trp53 Mus musculus` | Trp53 | 22059 | Mus musculus / 10090 | null | **0.97** | false | ✅ |
+| 2 | `TP53` | TP53 | 7157 | Homo sapiens / 9606 | **null** | **0.92** | false | ✅ |
+| 3 | `TP53 breast cancer` | TP53 | 7157 | Homo sapiens / 9606 | **"breast cancer"** | **0.85** | false | ✅ |
+| 4 | `BRCA2 human` | BRCA2 | 675 | Homo sapiens / 9606 (matchedSynonym="human") | null | **0.97** | false | ✅ |
+| 5 | `mouse Cd4` | Cd4 | 12504 | Mus musculus / 10090 (matchedSynonym="mouse") | null | **0.97** | false | ✅ |
+| 6 | `BARC` | barc | 40369 (default) | Drosophila melanogaster / 7227 | null | **0.80** | **true** (5 candidates) | ✅ |
+| 7 | `BRCA` | Brca2 | 37916 (default) | Drosophila melanogaster / 7227 | null | **0.80** | **true** (2 candidates) | ✅ |
+| 8a | `Hepatitis` | null | — | null | **"Hepatitis"** | **0.72** | false | ✅ |
+| 8b | `malaria` | null | — | null | **"malaria"** | **0.72** | false | ✅ |
+| 9 | `p53` | **TP53** | **7157** | Homo sapiens / 9606 | null | **0.92** | true (3 candidates) | ✅ |
+| 10a | `Cd4 human` | **CD4** | **920** | Homo sapiens / 9606 (matchedSynonym="human") | null | **0.97** | false | ✅ |
+| 10b | `Cd4 mouse` | **Cd4** | **12504** | Mus musculus / 10090 (matchedSynonym="mouse") | null | **0.97** | false | ✅ |
 
-## Downstream module confirmation (non-empty-state check)
+All 12 returned HTTP 200.  0 failures.
 
-For query 1 ("Trp53 Mus musculus") via `POST /api/analyze`:
-- `effectiveQuery`: `"Trp53"` (derived from `gene.symbol`, confidence ≥ 0.90)
-- Gene Explorer: 1 gene returned, `geneId=22059`, `officialSymbol=Trp53`
-- Transcript Explorer: `transcripts.available=true`, `count=5` (real transcripts, not "No transcript")
+### Query 6 (BARC) — full candidates list
 
-For query "TP53" via `POST /api/analyze`:
-- `effectiveQuery`: `"TP53"`
-- PubMed: 3 papers returned this page, `papersMeta.totalCount=39043`
-- GEO: 3 datasets returned this page, `datasetsMeta.totalCount=20589`
-- Gene Explorer: `geneId=7157`, `officialSymbol=TP53`
-- Transcript Explorer: `transcripts.available=true`, `count=26`
+```json
+[
+  {"gene":{"symbol":"barc (Drosophila melanogaster)","geneId":"40369"},"organism":{"name":"Drosophila melanogaster","taxId":null},"confidence":0.8},
+  {"gene":{"symbol":"barc (Anopheles gambiae)","geneId":"1276920"},"organism":{"name":"Anopheles gambiae","taxId":null},"confidence":0.8},
+  {"gene":{"symbol":"barc (Apis mellifera)","geneId":"408387"},"organism":{"name":"Apis mellifera","taxId":null},"confidence":0.8},
+  {"gene":{"symbol":"barc (Bactrocera dorsalis)","geneId":"105222449"},"organism":{"name":"Bactrocera dorsalis","taxId":null},"confidence":0.8},
+  {"gene":{"symbol":"barc (Tribolium castaneum)","geneId":"655826"},"organism":{"name":"Tribolium castaneum","taxId":null},"confidence":0.8}
+]
+```
 
-Protein Explorer is unchanged (on-demand, client-triggered from a
-`TranscriptRecord.proteinAccessionVersion`) — confirmed the code path
-(`app/api/protein/detail/route.ts`) still receives its accession from the
-transcript record only, with no independent resolution step.
+### Query 9 (p53) — full candidates list
+
+```json
+[
+  {"gene":{"symbol":"TP53","geneId":"7157"},"organism":{"name":"Homo sapiens","taxId":null},"confidence":0.78},
+  {"gene":{"symbol":"HCP5P3","geneId":"373859"},"organism":{"name":"Homo sapiens","taxId":null},"confidence":0.78},
+  {"gene":{"symbol":"HCP5P3","geneId":"352997"},"organism":{"name":"Homo sapiens","taxId":null},"confidence":0.78}
+]
+```
+
+## Downstream module confirmation — POST /api/analyze (actual observed)
+
+### "Trp53 Mus musculus"
+
+| Field | Observed value |
+|---|---|
+| `effectiveQuery` | `"Trp53"` (gene.symbol used; confidence 0.97 ≥ 0.90 threshold) |
+| `resolution.gene` | `{symbol:"Trp53", geneId:"22059", organismMatched:"Mus musculus"}` |
+| `resolution.organism` | `{name:"Mus musculus", taxId:"10090", matchedSynonym:"mus musculus"}` |
+| `resolution.disease` | `null` |
+| `resolution.confidence` | `0.97` |
+| `genes` returned | 1 (`geneId: 22059`, `officialSymbol: Trp53`) |
+| `transcripts.available` | `true` |
+| `transcripts.count` | **5** |
+
+### "TP53"
+
+| Field | Observed value |
+|---|---|
+| `effectiveQuery` | `"TP53"` |
+| `resolution.gene` | `{symbol:"TP53", geneId:"7157", organismMatched:"Homo sapiens"}` |
+| `resolution.disease` | `null` |
+| `resolution.confidence` | `0.92` |
+| `papersMeta.totalCount` | **39,052** |
+| `datasetsMeta.totalCount` | **20,591** |
+| `genes` returned | 1 (`geneId: 7157`, `officialSymbol: TP53`) |
+| `transcripts.available` | `true` |
+| `transcripts.count` | **26** |
 
 ## Regression checks
 
-| Check | Result |
+| Check | Observed result |
 |---|---|
-| PubMed/GEO results for "TP53" return real, non-empty data | ✅ 39,043 / 20,589 total matches |
-| Gene Explorer "TP53" returns the correct human gene (7157) | ✅ |
-| Transcript Explorer "TP53" returns real transcripts (26) | ✅ |
-| Protein Explorer chain (`GeneRecord → TranscriptRecord.proteinAccession → ProteinRecord`) unbroken | ✅ (code path unchanged, verified by inspection) |
-| `pnpm run typecheck` (tsc --noEmit) — zero errors | ✅ (verified after every step: types file, organism tables, resolver rewrite, orchestrator, ResultsContent, transcript guard) |
-| No Python/FastAPI, Redis, cache, rate-limiter, retry-logic, or `ModuleResult` changes | ✅ — no files under `artifacts/research-api` or any Python file were touched |
-| No AI-generated-section changes | ✅ — `landscape`/`emergingAreas`/`researchGaps`/`projects` mock arrays in `app/api/analyze/route.ts` untouched |
-| No UI styling/card layout/download mechanics changes | ✅ — `QueryResolutionCard` JSX structure/classNames preserved; only field bindings changed (old relationships-genes/organisms chip section removed since `NormalizedQuery` has no `relationships` field — see note below) |
-| Multi-gene lazy loading (Bug 12) still deferred until selection | ✅ — unchanged; Gene Explorer/transcript-fetch-on-select logic in `lib/gene` was not modified |
+| `pnpm run typecheck` (tsc --noEmit) — zero errors | ✅ **0 errors** (confirmed this session) |
+| PubMed/GEO for "TP53" return real, non-empty data | ✅ **39,052** PubMed / **20,591** GEO total matches |
+| Gene Explorer "TP53" returns correct human gene | ✅ `geneId=7157`, `officialSymbol=TP53` |
+| Transcript Explorer "TP53" returns real transcripts | ✅ `available=true`, `count=26` |
+| Protein Explorer chain unbroken (`GeneRecord → TranscriptRecord.proteinAccession → ProteinRecord`) | ✅ code path in `app/api/protein/detail/route.ts` unchanged — accession sourced from `TranscriptRecord` only |
+| No Python/FastAPI, Redis, cache, rate-limiter, `ModuleResult` changes | ✅ no files under `artifacts/research-api/` were touched |
+| No AI-generated-section changes | ✅ `landscape`/`emergingAreas`/`researchGaps`/`projects` arrays in `app/api/analyze/route.ts` untouched |
+| No UI styling/card layout/download mechanics changes | ✅ `QueryResolutionCard` JSX class names and structure preserved; only field bindings updated to read `NormalizedQuery` |
+| Multi-gene lazy loading still deferred until selection | ✅ `lib/gene/index.ts` transcript-fetch-on-select logic not modified |
+| Transcript Explorer Pipeline Invariant guard present | ✅ `searchTranscripts()` returns `status:"empty"` / `error.code:"RESOLUTION_REQUIRED"` when `geneId` is falsy |
 
-**Note on UI removal:** `QueryResolutionCard` previously rendered "Related
-Genes" / "Related Organisms" chip rows sourced from
-`QueryResolution.relationships.genes/organisms` (populated only for
-disease queries with known disease→organism associations, e.g.
-"Tuberculosis" → *Mycobacterium tuberculosis*). `NormalizedQuery` has no
-`relationships` field (not specified in Phase R), so this section was
-removed as dead code rather than left unreachable. An "Evidence" list
-(from `NormalizedQuery.evidence[]`) was added in its place, which
-surfaces comparable debugging value using data the new type actually
-provides.
+**Note on UI change:** `QueryResolutionCard` previously rendered "Related Genes" / "Related Organisms"
+chip rows sourced from `QueryResolution.relationships.genes/organisms`.  `NormalizedQuery` has no
+`relationships` field (not part of the Phase R spec), so that section was removed.  An "Evidence"
+list (from `NormalizedQuery.evidence[]`) was added in its place, surfacing equivalent debugging
+value using data the new type actually provides.
 
 ## Unrelated environment note
 
-The `artifacts/api-server` workflow shows a pre-existing `EADDRINUSE`
-failure (port 8080 conflict with the separately-configured `API Server`
-workflow, which is running and healthy). This is a different artifact,
-unrelated to ResearchCoPilot / Phase R, and was left untouched — it was
-already present before this session's changes and is out of scope for the
-Phase R spec.
+The `artifacts/api-server` managed workflow fails with `EADDRINUSE` on port 8080 because the
+separately-configured `API Server` workflow already holds that port.  This is a pre-existing
+conflict in a different artifact, unrelated to ResearchCoPilot / Phase R, and was not touched.

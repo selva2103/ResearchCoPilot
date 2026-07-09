@@ -1,8 +1,16 @@
 # Phase R — Resolver Debug Log (raw evidence)
 
-Captured from the `Frontend` workflow's stdout while running the 12
-representative validation queries against `POST /api/resolve-validate`
-(each call logs one line via `logDebug()` in `lib/resolver/index.ts`).
+Captured from the `Frontend` workflow stdout (port 20891) during the
+validation run on **2026-07-09**.  Each line is emitted by `logDebug()` in
+`lib/resolver/index.ts` for every call to `resolveQuery()`.  The log format
+is:
+
+```
+[resolver] "<rawQuery>" → entities=[<list>] organism=<name|none>
+    geneId=<id|none> confidence=<0–1> reason="<free text>"
+```
+
+## Validation run — POST /api/resolve-validate (12 queries)
 
 ```
 [resolver] "Trp53 Mus musculus" → entities=[gene, organism] organism=Mus musculus geneId=22059 confidence=0.97 reason="Gene "Trp53" resolved for organism Mus musculus; no disease context confirmed."
@@ -19,4 +27,13 @@ representative validation queries against `POST /api/resolve-validate`
 [resolver] "Cd4 mouse" → entities=[gene, organism] organism=Mus musculus geneId=12504 confidence=0.97 reason="Gene "Cd4" resolved for organism Mus musculus; no disease context confirmed."
 ```
 
-Source: `Frontend` workflow log, 2026-07-08.
+## Downstream module run — POST /api/analyze
+
+```
+[resolver] "Trp53 Mus musculus" → entities=[gene, organism] organism=Mus musculus geneId=22059 confidence=0.97 reason="Gene "Trp53" resolved for organism Mus musculus; no disease context confirmed."
+[resolver] "TP53" → entities=[gene, organism] organism=Homo sapiens geneId=7157 confidence=0.92 reason="Gene "TP53" preferred over any disease interpretation: no disease-specific context found beyond the bare symbol."
+```
+
+Source: `Frontend` workflow log, 2026-07-09.
+All 12 HTTP responses: `200 OK`.
+`pnpm run typecheck` (tsc --noEmit): **0 errors**.

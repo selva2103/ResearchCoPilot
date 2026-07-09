@@ -315,6 +315,9 @@
   .visible {
     visibility: visible;
   }
+  .fixed {
+    position: fixed;
+  }
   .sticky {
     position: sticky;
   }

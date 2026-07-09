@@ -1,0 +1,528 @@
+PHASE 5.4B — PROTEIN RESEARCH CONTEXT
+
+PROJECT CONTEXT — READ FIRST
+
+This repository is already updated to the latest GitHub commit. Pull
+latest before starting.
+
+This phase implements exactly the approved design specification
+"Phase 5.4B — Architecture Design Specification (Revised): Protein
+Research Context." Do not add, remove, or reinterpret scope beyond what
+is written in this prompt. If anything here seems incomplete or
+ambiguous relative to the design, stop and ask rather than inventing a
+resolution.
+
+Completed phases (do NOT rebuild any of these):
+- PubMed Explorer, GEO Explorer, Universal Pagination
+- Sequence Foundation (5.1)
+- Biological Query Resolver + Pipeline Unification (Phase R) — resolver
+  now produces NormalizedQuery with confidence, evidence, and a stable
+  GeneID
+- Gene Explorer (5.2)
+- Transcript Explorer (5.3A/B/C)
+- Protein Explorer Foundation (5.4A) — ProteinRecord, canonical
+  inheritance from MANE, NP_/XP_ status, FASTA download, Redis caching
+
+--------------------------------------------------
+
+IMPLEMENTATION SAFETY
+
+Before modifying any source file:
+1. Create a git checkpoint (commit or branch).
+2. After completing each incremental step (A–G below), run: TypeScript
+   compilation, lint (if configured), existing build, existing tests
+   (if present).
+3. If any step introduces a regression, fix it before proceeding. Never
+   continue to the next lettered step with a broken build.
+4. Prefer targeted changes over rewrites. Do not modify 5.4A's
+   ProteinRecord, fetch/parser/index files, or UI beyond what this
+   phase explicitly adds.
+5. Preserve existing code comments unless they become factually
+   incorrect as a result of a change made in this phase.
+6. Never commit code that does not compile — at every step, not just
+   the final commit.
+
+--------------------------------------------------
+
+FIRST ACTION — ESTABLISH CURRENT STATE
+
+1. Check whether PHASE-5.4A-FINAL-REPORT.md and PHASE-R-FINAL-REPORT.md
+   exist in the repo root. If they exist, read and trust them as your
+   starting state — do not re-verify anything they already confirm.
+2. If either is missing or incomplete, read only: types/protein-record.ts,
+   lib/protein/ (all files), types/normalized-query.ts, lib/resolver/
+   (entry points only), GeneRecord type file (specifically its OMIM/
+   disease association fields), TranscriptRecord type file.
+3. Do NOT re-read unrelated repository files once state is established.
+   Limit reads to what this phase needs.
+
+--------------------------------------------------
+
+SCOPE REFOCUS (per design Section 1)
+
+5.4A produced correct raw protein data (accession, length, status, MW,
+canonical flag) but no research context. This phase adds a derived,
+researcher-facing interpretation layer on top of ProteinRecord — it
+does NOT add new external data sources and does NOT modify how
+ProteinRecord itself is fetched, parsed, or cached.
+
+--------------------------------------------------
+
+NON-NEGOTIABLE CONSTRAINTS (per design Sections 2, 4, 6, 9)
+
+Do NOT:
+- Add any new external API or database (no UniProt, GO, AlphaFold, PDB,
+  InterPro, Pfam, Reactome, KEGG, drug targets). Everything in this
+  phase derives from data already fetched in 5.4A (GenPept detail) and
+  5.2 (Gene Explorer's already-fetched OMIM/disease association data).
+- Make a new NCBI/OMIM API call to obtain Biological Importance data. If
+  Gene Explorer's OMIM/disease association data is not already present
+  in the current request's GeneRecord, omit Biological Importance
+  entirely — do not fetch it fresh.
+- Use an LLM call to generate the biological summary. Summary generation
+  is structured extraction + formatting + sentence-joining from GenPept
+  `DEFINITION`/`COMMENT` text only. No inference, no paraphrasing that
+  changes meaning, no invented content to pad a sparse summary.
+- Fabricate biological role chips or Biological Importance text when the
+  underlying structured data doesn't support them. Omit the field
+  instead.
+- Retrofit Gene Explorer or Transcript Explorer onto the new
+  `ResearchContext<T>` type. That generic type is defined for reuse
+  later (Variant Explorer, 5.5+) but is NOT applied to any existing
+  stable module in this phase.
+- Modify 5.4A's ProteinRecord shape, its fetch/parse/cache logic, or its
+  FASTA download mechanism.
+- Build live PubMed-sourced Research Notes. The Research Notes field is
+  a structural placeholder only in this phase — always empty/absent in
+  the UI unless genuinely populated (which will not happen until a
+  future phase).
+- Build navigation-anchor/auto-scroll UI unless it adds no meaningful
+  complexity — this is optional polish, not a requirement to satisfy.
+
+--------------------------------------------------
+
+FILE 1: types/research-context.ts
+
+Create the generic interface and the protein-specific instantiation,
+exactly as specified in the design (Section 8):
+
+interface ResearchContext<T> {
+  subject: T;
+  summary: { text: string; source: string } | null;
+  roleChips: { label: string; source: string }[];
+  resolutionConfidence: "high" | "medium" | "low" | "ambiguous";
+  annotationConfidence: "well-annotated" | "limited" | "unavailable";
+  biologicalImportance: { text: string; source: string } | null;
+  relationships: Record<string, string>;
+  researchNotesPlaceholder: unknown[] | null;
+}
+
+Additionally define (per design Section 2's data model list):
+- `ProteinResearchContext` = `ResearchContext<ProteinRecord>`, with the
+  following protein-specific additions layered on top of the generic
+  shape:
+  - `canonicalExplanation: string` (the plain-language sentence — see
+    FILE 2)
+- Document every field with JSDoc, noting explicitly in the JSDoc for
+  `ResearchContext<T>` that it is intentionally generic but, per this
+  phase's scope, is currently only instantiated for Protein — not
+  retrofitted onto Gene or Transcript.
+
+VERSION AWARENESS RULE: Every identifier used to key, cache, or identify
+a ProteinResearchContext must always use the full accession version
+(e.g. NP_000537.3), never the bare accession (NP_000537). Do not strip
+or normalize away the version anywhere in this phase's code.
+
+--------------------------------------------------
+
+FILE 2: lib/protein/research-context.ts
+
+Implement pure derivation functions. None of these make new network
+calls — all inputs are already-fetched data passed in as arguments.
+
+Function: deriveSummary(genPeptCommentText, genPeptDefinitionText):
+{ text: string; source: string } | null
+- Structured extraction + formatting + sentence-joining ONLY. If input
+  text is empty/sparse, return a shorter result or null — never pad with
+  invented content. `source` must name the specific GenPept field(s)
+  used (e.g. "RefSeq GenPept COMMENT"). Document the exact extraction
+  rule used (which GenPept fields, what joining logic) in the final
+  report.
+
+Function: deriveRoleChips(genPeptFeatures/keywords): { label: string;
+source: string }[]
+- Extract short role labels from GenPept keyword/feature annotation
+  where reliably present. Each chip's `source` must name the specific
+  GenPept field it came from (e.g. "RefSeq GenPept KEYWORDS"). Return an
+  empty array if nothing reliable is found — never guess a role.
+  Extraction must be rule-based and data-driven from the GenPept
+  response itself. Do NOT maintain a manually curated mapping (e.g. a
+  hardcoded table like "TP53" → "Tumor suppressor") — that has the same
+  scaling flaw already avoided elsewhere in this project (Phase R's gene
+  list, disease keyword list).
+
+Function: deriveCanonicalExplanation(proteinRecord, transcriptRecord):
+string
+- If proteinRecord.isCanonical is true: return a sentence stating this
+  is the canonical protein via the MANE Select transcript.
+- If proteinRecord.isCanonical is false: return a sentence stating this
+  is a non-canonical isoform and naming the canonical accession if
+  known from the same gene's protein set.
+- If proteinRecord.isCanonical is null (non-human gene, per Phase R's
+  null-not-false rule): return a sentence stating canonical designation
+  does not apply to this organism — do not imply canonical/non-canonical
+  status where MANE does not exist.
+
+Function: computeAnnotationConfidence(genPeptDataCompleteness signals):
+"well-annotated" | "limited" | "unavailable"
+- Derived from how much structured GenPept data was actually available
+  (e.g. presence/absence of COMMENT text, keyword/feature data, protein
+  name). Document the exact rule used (what counts as
+  well-annotated/limited/unavailable) in the final report — this must
+  be a reasoned rule, not an arbitrary cutoff picked without
+  justification.
+- Internally, compute and log (but do NOT display in the UI) an evidence
+  coverage signal — e.g. which of {COMMENT, DEFINITION, KEYWORDS,
+  FEATURES} were present vs. absent for this protein, and the resulting
+  fraction. This is not part of the public ProteinResearchContext type
+  in this phase; it exists only as an internal/logged value that
+  computeAnnotationConfidence's label is derived from, so future quality
+  metrics have this data available without recomputation.
+
+Function: mapResolutionConfidence(normalizedQueryConfidence: number,
+ambiguous: boolean): "high" | "medium" | "low" | "ambiguous"
+- Maps Phase R's numeric resolver confidence (and its ambiguous flag)
+  to a researcher-facing label. Document the exact mapping rule used in
+  the final report — this is a label translation of Phase R's existing
+  evidence-based score, not a new confidence system.
+- READ-ONLY RULE: this function must never modify
+  NormalizedQuery.confidence or any other field on the NormalizedQuery
+  object. It only reads and translates the value into a label.
+
+Function: deriveBiologicalImportance(geneRecordOmimData): { text: string;
+source: string } | null
+- ONLY uses OMIM/disease association data already present on the
+  GeneRecord passed in — never triggers a new fetch. If that data is
+  absent or the current GeneRecord wasn't fetched with it, return null.
+  The `source` field must name where the text came from (e.g. "Gene
+  Explorer OMIM association").
+- GRACEFUL DEGRADATION: if OMIM data exists on the GeneRecord but is too
+  sparse/insufficient to form a genuine, specific statement, also return
+  null — do NOT fall back to a generic filler sentence (e.g. "This gene
+  is associated with disease"). A vague sentence is worse than no
+  sentence; omission is always preferred over generic filler.
+
+Function: buildRelationships(geneRecord, transcriptRecord, proteinRecord):
+Record<string, string>
+- Builds the Gene → Transcript → Protein → Species chain from data
+  already in memory (geneId, geneSymbol, transcriptId, accessionVersion,
+  proteinAccessionVersion, organism). No new API calls.
+
+ProteinResearchContext must be immutable after creation, consistent with
+the existing ProteinRecord/TranscriptRecord immutability pattern already
+used in this codebase.
+
+--------------------------------------------------
+
+FILE 3: lib/protein/index.ts (extend, do not rewrite)
+
+Function: getProteinResearchContext(proteinRecord, transcriptRecord,
+geneRecord, normalizedQuery): Promise<ModuleResult<ProteinResearchContext>>
+- Orchestrates the FILE 2 functions using data already available from
+  the existing pipeline (ProteinRecord from 5.4A, TranscriptRecord from
+  5.3, GeneRecord from 5.2, NormalizedQuery from Phase R). Makes zero
+  new network calls.
+- Cache the resulting ProteinResearchContext in the existing Redis cache
+  layer using this exact key:
+    researchcontext:protein:{proteinAccessionVersion}
+  This is a separate key from 5.4A's protein:summary/detail/fasta keys,
+  per the design's caching-separation rule (raw records vs. derived
+  interpretation have different staleness properties).
+- Returns ModuleResult<ProteinResearchContext> with status, data, count,
+  executionTimeMs, cached, timestamp — same shape convention as existing
+  ModuleResult usage elsewhere.
+
+Do not modify the existing getProteinsForTranscripts or getProteinDetail
+functions from 5.4A. This is a new, additive function only.
+
+`researchNotesPlaceholder` must never be serialized as an empty array in
+the cache. Store `null` when there is nothing to attach. An empty array
+implies "checked, found nothing structured to show" versus null meaning
+"no attachment yet" — future phases populating this field need that
+distinction, and null is the cleaner, smaller cache payload.
+
+--------------------------------------------------
+
+IMMUTABILITY RULE
+
+Once a ProteinResearchContext has been derived for a specific
+ProteinRecord, it must never mutate the underlying ProteinRecord,
+TranscriptRecord, GeneRecord, or NormalizedQuery. The Research Context
+layer is strictly read-only and derived. Any future enrichment (PubMed,
+UniProt, GO, Structures) must create a new derived object rather than
+modifying existing cached records. This applies to every function in
+FILE 2 and FILE 3 — none of them may write back to their input objects.
+
+DOMAIN/UI SEPARATION RULE
+
+ProteinResearchContext must remain a pure domain model with no
+UI-specific formatting — no HTML, JSX, Markdown, color codes, icon
+names, or badge-rendering strings anywhere in FILE 1, FILE 2, or FILE 3.
+All presentation decisions (chip styling, confidence indicator visuals,
+etc.) belong entirely to Integration 2's UI layer, which consumes the
+plain data and decides how to render it.
+
+--------------------------------------------------
+
+INTEGRATION 1: Gene Explorer OMIM data reuse (read-only)
+
+Confirm (do not refetch) that GeneRecord already carries OMIM/disease
+association data from Gene Explorer's existing 5.2 implementation. If
+this data is not present on the GeneRecord passed into
+getProteinResearchContext, Biological Importance must be omitted for
+that protein — do not add a new fetch path to obtain it.
+
+--------------------------------------------------
+
+INTEGRATION 2: UI — Research Context section
+
+Inside the existing nested protein panel (built in 5.4A, inside the
+transcript accordion), add a "Research Context" expandable subsection
+above the existing raw-fields detail panel (do not replace or redesign
+the existing panel):
+
+LAZY LOADING RULE: Research Context must not trigger any derivation or
+rendering work until the user explicitly expands this subsection —
+consistent with the lazy-loading behavior established in 5.4A. Even
+though the underlying derivation is local/computational rather than a
+network call, the UX contract (nothing extra happens until the user
+asks for it) must be preserved.
+
+- Collapsed by default, consistent with 5.4A's lazy-load pattern.
+- On expand, display (all data already derived by FILE 3, no new fetch
+  triggered by expanding this section):
+  - Biological summary (`.text`, if present; omitted cleanly if null).
+    Its `.source` is available for an on-demand provenance display (e.g.
+    hover/tap), same treatment as role chip evidence — not shown inline
+    by default.
+  - Biological role chips — small badge/chip components, styled
+    distinctly from but consistent with existing badge patterns (MANE
+    badge, status badge). Each chip shows its evidence/source on
+    hover/tap, not inline by default, so the card isn't visually
+    cluttered.
+  - Canonical/isoform explanation sentence
+  - Two distinct confidence indicators (Resolution Confidence and
+    Annotation Confidence) — visually distinguishable from each other;
+    exact visual treatment (label, dot, badge) is an implementation
+    choice, not fixed by this prompt.
+  - Biological Importance (if present; omitted cleanly, no "coming
+    soon" placeholder, if null)
+  - Protein Relationships — a compact visual chain: Gene → Transcript →
+    Protein → Species, using existing typography/badge patterns, no new
+    component family.
+  - Research Notes: not rendered at all in this phase (structural
+    placeholder only in the data model; never shown as an empty section
+    in the UI).
+- Error state: if Research Context derivation fails but ProteinRecord
+  succeeded, show the existing identifiers/FASTA panel normally and show
+  only a quiet "Context unavailable" note in place of the Research
+  Context section — never hide already-successful data.
+- Empty states: optional fields (Biological Importance, role chips) are
+  simply absent when no grounded/reliable data exists.
+- Mobile: reuse existing responsive text-truncation patterns from Gene
+  Explorer's summary section for the biological summary text.
+- Navigation anchors: optional per the design — implement only if
+  trivial; do not treat as a requirement.
+
+--------------------------------------------------
+
+INCREMENTAL IMPLEMENTATION REQUIREMENT
+
+Confirm TypeScript compiles after each step before proceeding to the
+next:
+
+Step A: FILE 1 (types) — confirm compiles.
+Step B: deriveSummary + deriveRoleChips (FILE 2) — confirm compiles,
+        test against NP_000537.3 (TP53 canonical protein) manually.
+Step C: deriveCanonicalExplanation + mapResolutionConfidence +
+        computeAnnotationConfidence (FILE 2) — confirm compiles.
+Step D: deriveBiologicalImportance + buildRelationships (FILE 2) —
+        confirm compiles, confirm no new network call is introduced.
+Step E: getProteinResearchContext orchestration + Redis caching
+        (FILE 3) — confirm compiles, confirm cache key format is exact.
+Step F: UI Integration 2 — confirm compiles, confirm existing 5.4A
+        protein panel (identifiers, FASTA download) is visually and
+        functionally unchanged.
+Step G: Full validation suite (below), regression testing, end state
+        documentation.
+
+If credits run low mid-sequence, stop at the end of the current
+lettered step, commit working code, and follow the CREDIT SAFETY RULE
+below.
+
+RECOMMENDED SESSION SPLIT
+- Session 1: Steps A–C
+- Session 2: Steps D–F
+- Session 3: Step G (validation, regression, documentation)
+
+--------------------------------------------------
+
+VALIDATION (report representative evidence, not every full object
+verbatim — attach full logs separately if needed)
+
+1. TP53 (human, canonical): NP_000537.3 → confirm correct canonical
+   explanation, correct Protein Relationships chain, role chips with
+   evidence tags present where GenPept data supports them.
+2. A non-canonical NM_ transcript's protein (same or different human
+   gene) → confirm isoform explanation names the canonical accession
+   correctly, not silently treated as canonical.
+3. Mouse Trp53 (non-human) → confirm canonical explanation states
+   canonical designation does not apply (not true/false) — consistent
+   with Phase R's null-not-false rule.
+4. Non-coding transcript → confirm Research Context section does not
+   render at all (existing 5.4A non-coding state is unaffected).
+5. A predicted (XP_) protein with sparse GenPept data → confirm
+   Resolution Confidence can be "high" while Annotation Confidence is
+   "limited" or "unavailable" — proving the two signals are genuinely
+   independent, not two labels for the same underlying number.
+6. FASTA download (from 5.4A) → confirm unaffected by anything added in
+   this phase.
+7. Rapid transcript-expand test → confirm Research Context always
+   matches the currently-expanded transcript's protein, no stale data.
+8. Evidence coverage → confirm every rendered summary sentence and role
+   chip carries a non-empty source tag; confirm no generated claim
+   lacks provenance.
+9. No-hallucination check on Biological Importance → confirm this field
+   is absent (not fabricated) for a protein/gene combination where no
+   grounded OMIM/disease association data exists on the GeneRecord —
+   this is a required negative test.
+10. Cache key check → confirm Redis key
+    researchcontext:protein:{proteinAccessionVersion} is used exactly as
+    specified (full accession version, never stripped), separate from
+    5.4A's protein:summary/detail/fasta keys.
+11. Cache/UI synchronization test → expand Protein A's Research Context,
+    then Protein B's, then re-expand Protein A → confirm the cached
+    ProteinResearchContext for Protein A is returned correctly and the
+    UI shows Protein A's data, not stale data from Protein B. This
+    catches cache/UI synchronization bugs specifically.
+12. Immutability validation → retrieve a cached ProteinResearchContext
+    for a given protein, then deliberately derive a second
+    ProteinResearchContext for the same ProteinRecord (bypassing cache).
+    Confirm: the source ProteinRecord, TranscriptRecord, GeneRecord, and
+    NormalizedQuery objects are all byte-for-byte unchanged after the
+    second derivation — only the newly returned derived object may
+    differ (or be identical, if inputs are identical). No cached raw
+    object may be mutated by the derivation process. This directly
+    tests the Immutability Rule specified above, not just its intent.
+
+--------------------------------------------------
+
+REGRESSION TESTING (targeted, with actual evidence)
+
+- 5.4A: TP53 protein panel — accession, length, status, MW, canonical
+  badge, FASTA download all still work exactly as before.
+- Transcript Explorer (5.3): TP53 transcript list, MANE Select badge,
+  FASTA/CDS downloads unaffected.
+- Phase R: confirm resolver confidence/evidence data is being read, not
+  modified, by mapResolutionConfidence.
+- Gene Explorer (5.2): TP53 Gene ID, chromosome, OMIM data unchanged and
+  unaffected by read-only reuse in this phase.
+- No TypeScript errors.
+- No Python files modified.
+- No AI-generated sections modified.
+- No new external API/database introduced anywhere in the diff.
+- Confirm Gene Explorer and Transcript Explorer's source files show no
+  references to `ResearchContext<T>` — the retrofit-avoidance constraint
+  held.
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits are exhausted before this phase is complete:
+1. Finish the current file — never leave a syntactically broken file.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit only working code, even if incomplete in scope.
+4. Write PHASE-5.4B-PARTIAL-REPORT.md containing: completed work,
+   remaining work, files modified, and the exact next implementation
+   step.
+
+--------------------------------------------------
+
+END STATE DOCUMENTATION (required — write as if the reader has never
+seen this conversation)
+
+Write PHASE-5.4B-FINAL-REPORT.md:
+1. Exact file paths created or modified.
+2. ResearchContext<T> and ProteinResearchContext — final fields and
+   types as implemented.
+3. Exact derivation rules used for: summary extraction, role chip
+   extraction, annotation confidence thresholds, resolution confidence
+   label mapping — written concretely, not vaguely.
+4. Confirm zero new API/network calls were introduced anywhere in this
+   phase.
+5. Redis cache key used and caching behavior confirmed separate from
+   5.4A's keys.
+6. Known limitations — document explicitly (e.g. genes/proteins where
+   summary or role chips were consistently empty due to sparse GenPept
+   data, any OMIM data gaps observed).
+7. Validation results per the Validation section above.
+8. Regression results with actual evidence.
+9. Confirm: no UniProt/GO/AlphaFold/PDB/InterPro/Pfam/Reactome/KEGG
+   integration exists anywhere in the diff; no LLM-generated summary
+   exists; no live PubMed Research Notes exists; Gene Explorer and
+   Transcript Explorer were not retrofitted onto ResearchContext<T>.
+10. "Derived From" section — explicitly list that ProteinResearchContext
+    is derived exclusively from ProteinRecord, TranscriptRecord,
+    GeneRecord, and NormalizedQuery, and confirm no additional data
+    source was used anywhere in its derivation.
+11. Derived Data Sources (field-by-field) — document exactly which
+    source object each field of ProteinResearchContext is derived from:
+    - `summary` ← ProteinRecord (GenPept detail)
+    - `roleChips` ← ProteinRecord (GenPept detail)
+    - `canonicalExplanation` ← ProteinRecord + TranscriptRecord
+    - `resolutionConfidence` ← NormalizedQuery
+    - `annotationConfidence` ← ProteinRecord (GenPept completeness)
+    - `biologicalImportance` ← GeneRecord (OMIM/disease association)
+    - `relationships` ← GeneRecord + TranscriptRecord + ProteinRecord
+    - `researchNotesPlaceholder` ← none (always null in this phase)
+    Confirm every field is derived entirely from these existing
+    in-memory objects and that no additional network requests or
+    external databases were consulted for any field. This documentation
+    becomes the reference point for Variant Explorer, Structures, and
+    Pathways when they extend this pattern.
+
+--------------------------------------------------
+
+FINAL REPORT
+
+Confirm: all validation and regression items pass with actual evidence,
+TypeScript compiles, no Python changes, no AI changes, app fully stable
+and runnable at end of this phase.
+
+FINAL SCOPE CONFIRMATION (explicit checklist, each item confirmed
+individually in the report, not as a single blanket statement):
+- Zero new network requests introduced anywhere in this phase's code.
+- Zero new external APIs or databases (UniProt, GO, AlphaFold, PDB,
+  InterPro, Pfam, Reactome, KEGG) integrated anywhere.
+- Zero new database dependencies (only the existing Redis cache layer
+  is used, with the new key namespace specified above).
+- Zero modifications to the Biological Query Resolver (Phase R) —
+  NormalizedQuery is read-only input to this phase.
+- Zero modifications to Gene Explorer (5.2) beyond read-only reuse of
+  its already-fetched OMIM/disease association data — no new Gene
+  Explorer fetch logic, no schema changes.
+- Zero architectural changes to Transcript Explorer (5.3) — it is only
+  read from (TranscriptRecord as input), not modified.
+- ProteinRecord's fetch, parser, and cache logic (5.4A) are completely
+  unchanged — this phase only reads ProteinRecord as input to derive
+  ProteinResearchContext.
+
+STOP. Do NOT implement Phase 5.4C, Variant Explorer (5.5), Functional
+Annotation (5.6), Protein Domains (5.7), Structures (5.8), Disease/Drug
+Targets (5.9), or the ResearchContext<T> retrofit onto Gene/Transcript
+Explorer in this phase.
+Commit all implementation changes together with PHASE-5.4B-FINAL-REPORT.md
+only after TypeScript passes and the validation checklist above
+completes successfully.
+Do not commit broken code.
