@@ -1,7 +1,7 @@
 /**
- * lib/protein/index.ts — Protein Explorer module orchestrator (Phase 5.4A)
+ * lib/protein/index.ts — Protein Explorer module orchestrator (Phase 5.4A/5.4B)
  *
- * Public API:
+ * Public API (Phase 5.4A — unchanged):
  *   getProteinsForTranscripts(transcripts) → Promise<ModuleResult<ProteinRecord>>
  *     Filters to coding transcripts with a non-null proteinAccessionVersion,
  *     fetches ESummary for all of them in a single NCBI call, and returns
@@ -11,12 +11,26 @@
  *     Fetches GenPept for a single protein and returns the enriched ProteinRecord.
  *     Called only when the user expands a specific protein sub-panel.
  *
+ * Public API (Phase 5.4B — new additive function only):
+ *   getProteinResearchContext(genPeptText, proteinRecord, transcriptRecord, geneRecord, normalizedQuery)
+ *     → Promise<ModuleResult<ProteinResearchContext>>
+ *     Derives a ProteinResearchContext from already-fetched data. Makes ZERO new
+ *     network calls. The caller (app/api/protein/research-context route) is
+ *     responsible for supplying the raw GenPept text (obtained from fetchProteinDetail).
+ *     Results are cached in-process by researchcontext:protein:{accessionVersion} key.
+ *
  * NCBI call accounting for Phase 5.4A:
  *   getProteinsForTranscripts: 1 call (batched ESummary — regardless of gene size)
  *   getProteinDetail:          1 call (single GenPept EFetch — on-demand)
  *   FASTA download:            1 call (single FASTA EFetch — via download route)
  *
- * Redis cache keys (documented for Phase 5.4B activation):
+ * NCBI call accounting for Phase 5.4B:
+ *   getProteinResearchContext: 0 calls (pure derivation — caller supplies GenPept text)
+ *
+ * In-process cache keys (separate namespace from 5.4A's fetch-level keys):
+ *   researchcontext:protein:{proteinAccessionVersion}  ← Phase 5.4B (this file)
+ *
+ * Redis cache keys (documented for future Redis activation):
  *   protein:summary:{proteinAccessionVersion}
  *   protein:detail:{proteinAccessionVersion}
  *   protein:fasta:{proteinAccessionVersion}
@@ -25,10 +39,22 @@
 
 import type { TranscriptRecord } from "@/types/transcript-record";
 import type { ProteinRecord } from "@/types/protein-record";
+import type { GeneRecord } from "@/types/gene-record";
+import type { NormalizedQuery } from "@/types/normalized-query";
+import type { ProteinResearchContext } from "@/types/research-context";
 import type { ModuleResult } from "@/types/module-result";
 import { buildModuleResult, toModuleError } from "@/types/module-result";
 import { fetchProteinSummaries, fetchProteinDetail } from "./fetch";
 import { parseProteinSummary, enrichWithDetail } from "./parser";
+import {
+  deriveSummary,
+  deriveRoleChips,
+  deriveCanonicalExplanation,
+  computeAnnotationConfidence,
+  mapResolutionConfidence,
+  deriveBiologicalImportance,
+  buildRelationships,
+} from "./research-context";
 
 // ── getProteinsForTranscripts ─────────────────────────────────────────────────
 
@@ -124,6 +150,99 @@ export async function getProteinsForTranscripts(
       status: "error",
       data: [],
       error: toModuleError("PROTEIN_SUMMARY_ERROR", err),
+      startedAt,
+    });
+  }
+}
+
+// ── In-process research context cache (Phase 5.4B) ────────────────────────────
+// Key format: "researchcontext:protein:{proteinAccessionVersion}"
+// Separate namespace from 5.4A's protein:summary / protein:detail / protein:fasta keys.
+// The full accession version is always used — never stripped.
+const researchContextCache = new Map<string, ProteinResearchContext>();
+
+/**
+ * Returns true when the research context for this accession version is already
+ * in the in-process cache. Used by the route to skip the NCBI fetch on cache hits.
+ */
+export function isResearchContextCached(accessionVersion: string): boolean {
+  return researchContextCache.has(`researchcontext:protein:${accessionVersion}`);
+}
+
+// ── getProteinResearchContext ─────────────────────────────────────────────────
+
+/**
+ * Derive a ProteinResearchContext from already-fetched data. Makes ZERO new
+ * network calls — the caller must supply the raw GenPept text.
+ *
+ * Cache: results are stored in `researchContextCache` keyed by
+ * `researchcontext:protein:{proteinAccessionVersion}`. On a cache hit, the
+ * supplied `genPeptText` is ignored and the cached result is returned immediately.
+ *
+ * Immutability: all derivation functions return new objects; none mutate their
+ * inputs. The cached ProteinResearchContext is frozen (Object.freeze) to enforce
+ * the Phase 5.4B immutability rule at runtime.
+ *
+ * @param genPeptText    Raw GenPept flat-file text (from fetchProteinDetail).
+ *                       Ignored on cache hit — pass "" on a known cache hit.
+ * @param proteinRecord  ProteinRecord (detail-enriched, with proteinName + molecularWeight).
+ * @param transcriptRecord TranscriptRecord for the parent transcript.
+ * @param geneRecord     GeneRecord for the parent gene.
+ * @param normalizedQuery Phase R resolver output, or null when not available.
+ */
+export async function getProteinResearchContext(
+  genPeptText: string,
+  proteinRecord: ProteinRecord,
+  transcriptRecord: TranscriptRecord,
+  geneRecord: GeneRecord,
+  normalizedQuery: NormalizedQuery | null
+): Promise<ModuleResult<ProteinResearchContext>> {
+  const startedAt = performance.now();
+  const cacheKey = `researchcontext:protein:${proteinRecord.proteinAccessionVersion}`;
+
+  // Cache hit — return immediately, genPeptText is ignored.
+  const cached = researchContextCache.get(cacheKey);
+  if (cached) {
+    return buildModuleResult({
+      module: "protein-research-context",
+      status: "success",
+      data: [cached],
+      error: null,
+      startedAt,
+    });
+  }
+
+  try {
+    // All derivation functions are pure — no network calls inside any of them.
+    const context: ProteinResearchContext = Object.freeze({
+      subject: proteinRecord,
+      summary: deriveSummary(genPeptText),
+      roleChips: deriveRoleChips(genPeptText),
+      canonicalExplanation: deriveCanonicalExplanation(proteinRecord, transcriptRecord),
+      resolutionConfidence: normalizedQuery
+        ? mapResolutionConfidence(normalizedQuery.confidence, normalizedQuery.ambiguous)
+        : "ambiguous",
+      annotationConfidence: computeAnnotationConfidence(genPeptText, proteinRecord),
+      biologicalImportance: deriveBiologicalImportance(geneRecord),
+      relationships: buildRelationships(geneRecord, transcriptRecord, proteinRecord),
+      researchNotesPlaceholder: null,
+    });
+
+    researchContextCache.set(cacheKey, context);
+
+    return buildModuleResult({
+      module: "protein-research-context",
+      status: "success",
+      data: [context],
+      error: null,
+      startedAt,
+    });
+  } catch (err) {
+    return buildModuleResult({
+      module: "protein-research-context",
+      status: "error",
+      data: [],
+      error: toModuleError("RESEARCH_CONTEXT_DERIVATION_ERROR", err),
       startedAt,
     });
   }

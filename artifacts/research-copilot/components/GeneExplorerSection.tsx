@@ -35,6 +35,8 @@ import { useState, useEffect, useRef } from "react";
 import type { GeneRecord } from "@/types/gene-record";
 import type { TranscriptRecord } from "@/types/transcript-record";
 import type { ProteinRecord } from "@/types/protein-record";
+import type { NormalizedQuery } from "@/types/normalized-query";
+import type { ProteinResearchContext } from "@/types/research-context";
 import type { ModuleResult } from "@/types/module-result";
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
@@ -60,6 +62,8 @@ interface GeneExplorerSectionProps {
   genesError?: string;
   onLoadMore: () => void;
   onRetry: (offset: number) => void;
+  /** Phase R resolver output — passed to ProteinPanel for Research Context derivation. */
+  normalizedQuery?: NormalizedQuery | null;
 }
 
 // ─── Section root ──────────────────────────────────────────────────────────────
@@ -73,6 +77,7 @@ export default function GeneExplorerSection({
   genesError,
   onLoadMore,
   onRetry,
+  normalizedQuery = null,
 }: GeneExplorerSectionProps) {
   // Hide section entirely when: no genes, no error, and no Loading state
   // (non-gene queries — organism/disease/accession — produce empty results legitimately)
@@ -125,7 +130,12 @@ export default function GeneExplorerSection({
         {genes.length > 0 && (
           <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
             {genes.map((gene, idx) => (
-              <GeneCard key={gene.geneId} gene={gene} isPrimary={idx === 0} />
+              <GeneCard
+                key={gene.geneId}
+                gene={gene}
+                isPrimary={idx === 0}
+                normalizedQuery={normalizedQuery}
+              />
             ))}
           </div>
         )}
@@ -153,7 +163,15 @@ export default function GeneExplorerSection({
 
 // ─── Individual gene card ──────────────────────────────────────────────────────
 
-function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean }) {
+function GeneCard({
+  gene,
+  isPrimary,
+  normalizedQuery,
+}: {
+  gene: GeneRecord;
+  isPrimary: boolean;
+  normalizedQuery: NormalizedQuery | null;
+}) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const SUMMARY_TRUNCATE = 280;
 
@@ -348,7 +366,7 @@ function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean })
       </div>
 
       {/* ── Transcript Explorer (Phase 5.3A) ─────────────────────────────── */}
-      {isPrimary && <TranscriptExplorer gene={gene} />}
+      {isPrimary && <TranscriptExplorer gene={gene} normalizedQuery={normalizedQuery} />}
     </div>
   );
 }
@@ -357,7 +375,13 @@ function GeneCard({ gene, isPrimary }: { gene: GeneRecord; isPrimary: boolean })
 
 const TRANSCRIPT_PAGE_SIZE = 10;
 
-function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
+function TranscriptExplorer({
+  gene,
+  normalizedQuery,
+}: {
+  gene: GeneRecord;
+  normalizedQuery: NormalizedQuery | null;
+}) {
   const { available, count, records, maneSelectPresent } = gene.transcripts;
   const isHumanGene = gene.taxonomyId === "9606";
 
@@ -507,6 +531,8 @@ function TranscriptExplorer({ gene }: { gene: GeneRecord }) {
               }
               proteinSummaryLoading={proteinSummaryLoading}
               proteinSummaryError={proteinSummaryError}
+              geneRecord={gene}
+              normalizedQuery={normalizedQuery}
             />
           ))}
         </div>
@@ -578,6 +604,8 @@ function TranscriptRow({
   proteinRecord,
   proteinSummaryLoading,
   proteinSummaryError,
+  geneRecord,
+  normalizedQuery,
 }: {
   transcript: TranscriptRecord;
   isExpanded: boolean;
@@ -586,6 +614,8 @@ function TranscriptRow({
   proteinRecord: ProteinRecord | null | undefined;
   proteinSummaryLoading: boolean;
   proteinSummaryError: string | null;
+  geneRecord: GeneRecord;
+  normalizedQuery: NormalizedQuery | null;
 }) {
   const prefixColor: Record<TranscriptRecord["accessionPrefix"], string> = {
     NM_: "bg-emerald-600 text-white",
@@ -833,6 +863,8 @@ function TranscriptRow({
             proteinRecord={proteinRecord}
             proteinSummaryLoading={proteinSummaryLoading}
             proteinSummaryError={proteinSummaryError}
+            geneRecord={geneRecord}
+            normalizedQuery={normalizedQuery}
           />
         </div>
       )}
