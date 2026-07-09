@@ -894,12 +894,16 @@ function ProteinPanel({
   proteinRecord,
   proteinSummaryLoading,
   proteinSummaryError,
+  geneRecord,
+  normalizedQuery,
 }: {
   transcript: TranscriptRecord;
   isCoding: boolean;
   proteinRecord: ProteinRecord | null | undefined;
   proteinSummaryLoading: boolean;
   proteinSummaryError: string | null;
+  geneRecord: GeneRecord;
+  normalizedQuery: NormalizedQuery | null;
 }) {
   const [detailExpanded, setDetailExpanded] = useState(false);
   const [detailRecord, setDetailRecord] = useState<ProteinRecord | null>(null);
@@ -907,6 +911,61 @@ function ProteinPanel({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [fastaState, setFastaState] = useState<DownloadState>({ status: "idle" });
   const detailFetchedRef = useRef(false);
+
+  // ── Research Context (Phase 5.4B) — lazy, collapsed by default ─────────────
+  // Derivation is computational (no direct network fetch on our side beyond
+  // the one route call), but per spec it must still not run until the user
+  // explicitly expands this subsection.
+  const [rcExpanded, setRcExpanded] = useState(false);
+  const [rcContext, setRcContext] = useState<ProteinResearchContext | null>(null);
+  const [rcLoading, setRcLoading] = useState(false);
+  const [rcError, setRcError] = useState<string | null>(null);
+  const rcFetchedRef = useRef(false);
+  // Guards against a stale response overwriting a newer one when the user
+  // rapidly expands/collapses different transcripts' protein panels.
+  const rcRequestAccessionRef = useRef<string | null>(null);
+
+  const handleResearchContextToggle = async () => {
+    const opening = !rcExpanded;
+    setRcExpanded((v) => !v);
+    if (opening && !rcFetchedRef.current && proteinRecord) {
+      rcFetchedRef.current = true;
+      const accession = proteinRecord.proteinAccessionVersion;
+      rcRequestAccessionRef.current = accession;
+      setRcLoading(true);
+      setRcError(null);
+      try {
+        const res = await fetch("/api/protein/research-context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accession,
+            baseRecord: proteinRecord,
+            transcriptRecord: transcript,
+            geneRecord,
+            normalizedQuery,
+          }),
+        });
+        const result: ModuleResult<ProteinResearchContext> = await res.json();
+        // Ignore a response that no longer matches the currently-relevant accession
+        // (guards against stale data if the user expanded a different protein first).
+        if (rcRequestAccessionRef.current !== accession) return;
+        if (result.status === "error" || result.data.length === 0) {
+          setRcError(result.error?.message ?? "Context unavailable.");
+        } else {
+          setRcContext(result.data[0]);
+        }
+      } catch {
+        if (rcRequestAccessionRef.current === accession) {
+          setRcError("Context unavailable.");
+        }
+      } finally {
+        if (rcRequestAccessionRef.current === accession) {
+          setRcLoading(false);
+        }
+      }
+    }
+  };
 
   const handleDetailToggle = async () => {
     const opening = !detailExpanded;
@@ -1064,6 +1123,152 @@ function ProteinPanel({
           {/* Detail section — shown only when expanded */}
           {detailExpanded && (
             <div className="px-2.5 pb-2.5 pt-1 border-t border-slate-200 dark:border-slate-700/60 space-y-2">
+              {/* ── Research Context (Phase 5.4B) — expandable, above raw fields ── */}
+              <div className="rounded-md bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700/60 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={handleResearchContextToggle}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
+                >
+                  <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                    🔬 Research Context
+                  </span>
+                  <span className="ml-auto text-slate-400 dark:text-slate-500 text-[11px]">
+                    {rcExpanded ? "▲" : "▼"}
+                  </span>
+                </button>
+
+                {rcExpanded && (
+                  <div className="px-2 pb-2 pt-0.5 border-t border-slate-200 dark:border-slate-700/60 space-y-2.5">
+                    {rcLoading && (
+                      <div className="flex items-center gap-1.5">
+                        <LoadingSpinner />
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          Deriving research context…
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Derivation failed — ProteinRecord/FASTA above is unaffected, quiet note only */}
+                    {!rcLoading && rcError && (
+                      <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                        Context unavailable.
+                      </p>
+                    )}
+
+                    {!rcLoading && !rcError && rcContext && (
+                      <>
+                        {/* Biological summary */}
+                        {rcContext.summary && (
+                          <div className="space-y-0.5">
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                              Summary
+                            </p>
+                            <p className="text-xs text-slate-600 dark:text-slate-300 leading-snug line-clamp-4 sm:line-clamp-none">
+                              {rcContext.summary.text}
+                            </p>
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                              Source: {rcContext.summary.source}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Biological role chips — each with its own evidence source */}
+                        {rcContext.roleChips.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                              Biological Role
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {rcContext.roleChips.map((chip, i) => (
+                                <span
+                                  key={`${chip.label}-${i}`}
+                                  title={`Source: ${chip.source}`}
+                                  className="text-[10px] font-semibold bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-200 px-1.5 py-0.5 rounded-full"
+                                >
+                                  {chip.label}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Canonical / isoform explanation */}
+                        <div className="space-y-0.5">
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                            Canonical Status
+                          </p>
+                          <p className="text-xs text-slate-600 dark:text-slate-300 leading-snug">
+                            {rcContext.canonicalExplanation}
+                          </p>
+                        </div>
+
+                        {/* Two distinct, visually-differentiated confidence indicators */}
+                        <div className="flex flex-wrap gap-1.5">
+                          <span
+                            title="Resolution Confidence — how confidently the query resolved to this gene/organism (Phase R)"
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+                              rcContext.resolutionConfidence === "high"
+                                ? "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700"
+                                : rcContext.resolutionConfidence === "medium"
+                                ? "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
+                                : rcContext.resolutionConfidence === "low"
+                                ? "bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-700"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-600"
+                            }`}
+                          >
+                            Resolution: {rcContext.resolutionConfidence}
+                          </span>
+                          <span
+                            title="Annotation Confidence — how well-annotated the underlying GenPept record is"
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                              rcContext.annotationConfidence === "well-annotated"
+                                ? "bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200"
+                                : rcContext.annotationConfidence === "limited"
+                                ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
+                            }`}
+                          >
+                            Annotation: {rcContext.annotationConfidence}
+                          </span>
+                        </div>
+
+                        {/* Biological Importance — omitted cleanly when not grounded */}
+                        {rcContext.biologicalImportance && (
+                          <div className="space-y-0.5">
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                              Biological Importance
+                            </p>
+                            <p className="text-xs text-slate-600 dark:text-slate-300 leading-snug">
+                              {rcContext.biologicalImportance.text}
+                            </p>
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                              Source: {rcContext.biologicalImportance.source}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Protein Relationships — compact Gene → Transcript → Protein → Species chain */}
+                        <div className="space-y-0.5">
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                            Relationships
+                          </p>
+                          <p className="text-xs text-slate-600 dark:text-slate-300 font-mono leading-snug break-words">
+                            {rcContext.relationships.gene}
+                            {" → "}
+                            {rcContext.relationships.transcript}
+                            {" → "}
+                            {rcContext.relationships.protein}
+                            {" → "}
+                            {rcContext.relationships.species}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Loading detail */}
               {detailLoading && (
                 <div className="flex items-center gap-1.5">
