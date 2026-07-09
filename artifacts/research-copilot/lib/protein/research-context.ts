@@ -23,8 +23,16 @@
  *   2. Split the resulting string by "; " (semicolon-space).
  *   3. Filter out literal "." (empty KEYWORDS), empty strings, and single-
  *      character tokens.
- *   4. Return the first 8 non-empty terms. Each chip's source is
+ *   4. Filter out curation/database metadata terms that are NOT biological
+ *      role annotations (e.g. "RefSeq", "RefSeq Select", "MANE Select",
+ *      "MANE Select Plus Clinical", "Reference proteome"). These terms
+ *      describe the record's curation status, not the protein's biological
+ *      function, and must never be surfaced as if they were a role.
+ *   5. Return the first 8 remaining non-empty terms. Each chip's source is
  *      "RefSeq GenPept KEYWORDS".
+ *   6. If nothing remains after filtering, return [] — the UI omits the
+ *      role-chips section entirely rather than showing metadata as if it
+ *      were a biological role.
  *   Note: never maintain a curated mapping of gene symbol → role. The chips
  *   are data-driven from the GenPept KEYWORDS field for this specific protein.
  *
@@ -197,6 +205,22 @@ export function deriveSummary(
  * Data-driven: never maps gene symbols to roles via a curated table.
  * See module JSDoc for the exact extraction rule.
  */
+// Curation/database metadata terms that appear in the GenPept KEYWORDS field
+// but describe the record's curation status, not the protein's biological
+// role/function. These must never be surfaced as if they were a biological
+// role chip. Matched case-insensitively against the full chip text.
+const NON_BIOLOGICAL_KEYWORD_TERMS = new Set(
+  [
+    "RefSeq",
+    "RefSeq Select",
+    "MANE Select",
+    "MANE Select Plus Clinical",
+    "MANE Plus Clinical",
+    "Reference proteome",
+    "Complete proteome",
+  ].map((t) => t.toLowerCase())
+);
+
 export function deriveRoleChips(
   genPeptText: string
 ): ProteinResearchContext["roleChips"] {
@@ -206,7 +230,10 @@ export function deriveRoleChips(
   const chips = keywords
     .split(/;\s*/)
     .map((k) => k.replace(/\.$/, "").trim())
-    .filter((k) => k.length > 1 && k !== ".");
+    .filter((k) => k.length > 1 && k !== ".")
+    .filter((k) => !NON_BIOLOGICAL_KEYWORD_TERMS.has(k.toLowerCase()));
+
+  if (chips.length === 0) return [];
 
   return chips.slice(0, 8).map((label) => ({
     label,
