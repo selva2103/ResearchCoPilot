@@ -250,10 +250,18 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
       name: explicitOrganism.name,
     });
   } else {
+    // CASE-SENSITIVITY PATCH: when q is already all-uppercase (matches
+    // GENE_SYMBOL_RE directly), pass it through unchanged as before. When q is
+    // mixed-case but shaped like a gene symbol once uppercased (e.g. "Trp53"),
+    // preserve its ORIGINAL case rather than uppercasing it — resolveGene's
+    // new Step 0a needs the exact case to check it against species-specific
+    // symbol conventions (mouse/rat sentence-case vs. human ALL-CAPS) before
+    // falling back to a case-insensitive human-first match. Uppercasing here
+    // used to destroy that information before resolveGene ever saw it.
     const wholeStringCandidate = GENE_SYMBOL_RE.test(q)
       ? q
       : GENE_SYMBOL_RE.test(q.toUpperCase()) && /\d/.test(q)
-      ? q.toUpperCase()
+      ? q
       : null;
 
     if (wholeStringCandidate) {

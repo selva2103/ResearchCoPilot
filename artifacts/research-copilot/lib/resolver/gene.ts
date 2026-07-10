@@ -34,6 +34,11 @@ import {
 } from "@/lib/resolver/fetch";
 import type { QueryResolution, CandidateMatch } from "@/types/query-resolution";
 import { toConfidenceTier } from "@/types/query-resolution";
+import {
+  ORGANISM_SYNONYM_KEYS,
+  resolveOrganismSynonym,
+} from "@/lib/resolver/organism-synonyms";
+import type { OrganismSynonymEntry } from "@/lib/resolver/organism-synonyms";
 
 // ── Gene symbol pattern (mirrors lib/genbank/search.ts GENE_SYMBOL_RE) ────────
 // All-uppercase letters and digits, 2–13 characters, starting with a letter.
@@ -122,12 +127,116 @@ export async function resolveGene(
   query: string,
   detectedOrganism?: { taxId: number; name: string }
 ): Promise<Omit<QueryResolution, "originalQuery"> | null> {
+  const trimmedOriginalCase = query.trim();
+
   // When called from the organism-prefix pre-step, bypass the uppercase-only
   // symbol guard — non-human gene symbols are often mixed-case (Trp53, Sox2).
-  // When called from the normal pipeline, the uppercase-only guard still applies.
-  if (!detectedOrganism && !GENE_SYMBOL_RE.test(query.trim())) return null;
+  // When called from the normal pipeline (no detectedOrganism), also accept a
+  // mixed-case bare symbol (e.g. "Trp53") so Step 0a below can check it against
+  // species-specific case conventions before falling back to the uppercase
+  // human-first search. This mirrors the same mixed-case allowance already
+  // used by the organism-prefix path — it does not change what ultimately gets
+  // treated as human vs. non-human, only what's allowed to reach the checks.
+  const isMixedCaseBareCandidate =
+    !GENE_SYMBOL_RE.test(trimmedOriginalCase) &&
+    GENE_SYMBOL_RE.test(trimmedOriginalCase.toUpperCase()) &&
+    /\d/.test(trimmedOriginalCase);
+  if (
+    !detectedOrganism &&
+    !GENE_SYMBOL_RE.test(trimmedOriginalCase) &&
+    !isMixedCaseBareCandidate
+  )
+    return null;
 
-  const q = query.trim().toUpperCase();
+  const q = trimmedOriginalCase.toUpperCase();
+
+  // ── Step 0a: Case-convention species check (CASE-SENSITIVITY PATCH) ──────
+  // Only runs for bare queries (no explicit organism stated) whose exact case
+  // does NOT already match the human ALL-CAPS convention (e.g. "Trp53", "Tp53").
+  // Official gene symbol case is organism-specific (human: ALL-CAPS; mouse/rat/
+  // most other organisms: sentence-case or other non-all-caps forms). Searching
+  // case-insensitively and defaulting to the human-restricted search (Step 1)
+  // can surface a human gene via an alias/synonym match even when the query's
+  // exact case matches a different organism's real official symbol (e.g. bare
+  // "Trp53" was matching human TP53 via a historical alias, even though "Trp53"
+  // is mouse's actual official symbol). This step checks the real NCBI Gene
+  // ESummary result set (no new lookup mechanism — same ESearch/ESummary calls
+  // used everywhere else in this file) for an entry whose official symbol is an
+  // EXACT, case-sensitive match to the query, from a non-human organism. If
+  // found, that is preferred; otherwise (no confirmed exact-case gene) it falls
+  // through unchanged to Step 1's existing human-first search.
+  if (!detectedOrganism && trimmedOriginalCase !== q && /^[A-Z]/.test(trimmedOriginalCase)) {
+    // Check each known non-human model organism (the same canonical table
+    // organism-prefix.ts already uses for explicit-organism detection — reused
+    // here, not duplicated) via the identical taxId-filtered ESearch pattern
+    // Step 0 below already uses. A global cross-organism symbol search (no
+    // taxId filter) was tried first but proved unreliable: NCBI's `[sym]`
+    // field does fuzzy/alias expansion across thousands of unrelated hits, so
+    // a real match (e.g. rat's exact "Tp53") can be pushed past the retmax
+    // window. Filtering per known organism keeps each search small and exact.
+    // Mouse (10090) and rat (10116) are checked first — they're the organisms
+    // whose official symbol conventions (sentence-case) this patch was written
+    // for, and checking them first keeps the common case fast without
+    // requiring every organism to be probed before a match is found.
+    const PRIORITY_TAX_IDS = [10090, 10116];
+    const allCandidates = Array.from(
+      new Map(
+        ORGANISM_SYNONYM_KEYS.map((key) => resolveOrganismSynonym(key)!)
+          .filter((org) => org.taxId !== 9606) // human handled by Step 1 below
+          .map((org) => [org.taxId, org])
+      ).values()
+    );
+    const candidateOrganisms = [
+      ...PRIORITY_TAX_IDS.map((taxId) => allCandidates.find((o) => o.taxId === taxId)).filter(
+        (o): o is OrganismSynonymEntry => Boolean(o)
+      ),
+      ...allCandidates.filter((o) => !PRIORITY_TAX_IDS.includes(o.taxId)),
+    ];
+
+    let exactCaseNonHuman: GeneESummaryEntry | undefined;
+    for (const org of candidateOrganisms) {
+      const { count: orgCaseCount, ids: orgCaseIds } = await geneESearch(
+        `${q}[sym] AND ${org.taxId}[Taxonomy ID]`
+      );
+      if (orgCaseCount > 0 && orgCaseIds.length > 0) {
+        await sleep(RESOLVER_RATE_DELAY_MS);
+        const orgEntries = await geneESummary(orgCaseIds);
+        exactCaseNonHuman = orgEntries.find((e) => e.name === trimmedOriginalCase);
+        if (exactCaseNonHuman) break;
+      }
+    }
+
+    if (exactCaseNonHuman) {
+      const aliases = buildAliases(exactCaseNonHuman);
+      return {
+        normalizedQuery: exactCaseNonHuman.name,
+        queryType: "Gene",
+        confidence: 0.92, // HIGH — exact-case official symbol match confirmed via NCBI Gene
+        confidenceTier: toConfidenceTier(0.92),
+        matchedProvider: "ncbi-gene",
+        primaryIdentifier: exactCaseNonHuman.uid,
+        identifierScheme: "ncbi-gene",
+        scientificName: exactCaseNonHuman.description,
+        organism: exactCaseNonHuman.organism.scientificname,
+        taxonomyId: String(exactCaseNonHuman.organism.taxid),
+        synonyms: aliases,
+        synonymSource: aliases.length > 0 ? "ncbi-gene" : undefined,
+        relationships: {
+          organisms: [exactCaseNonHuman.organism.scientificname],
+        },
+        resolutionPath: "ncbi-gene-case-convention",
+        ambiguityDetected: false,
+        selectedMatch: {
+          identifier: exactCaseNonHuman.uid,
+          displayName: exactCaseNonHuman.name,
+          organism: exactCaseNonHuman.organism.scientificname,
+          queryType: "Gene",
+          confidence: 0.92,
+        },
+        notes: `Exact-case symbol match "${trimmedOriginalCase}" confirmed as the official gene symbol for ${exactCaseNonHuman.organism.scientificname} — preferred over case-insensitive human match.`,
+      };
+    }
+  }
 
   // ── Step 0: Organism-specific path (FIX 2) ────────────────────────────────
   // Only runs when the caller detected an organism prefix (e.g. "mouse CD4").
