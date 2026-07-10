@@ -415,6 +415,7 @@ export default function ResultsContent() {
             genesError={genesError}
             onLoadMore={() => loadMoreGenes()}
             onRetry={(offset) => loadMoreGenes(offset)}
+            normalizedQuery={resolution}
           />
 
           <DatasetsSection

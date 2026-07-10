@@ -200,13 +200,24 @@ export async function getProteinResearchContext(
   const startedAt = performance.now();
   const cacheKey = `researchcontext:protein:${proteinRecord.proteinAccessionVersion}`;
 
-  // Cache hit — return immediately, genPeptText is ignored.
+  // resolutionConfidence is derived from the CURRENT request's normalizedQuery,
+  // not from the GenPept-derived data — it must never be frozen into the
+  // per-accession cache. Two different queries can resolve to the same protein
+  // with different confidence (e.g. a later, more specific query), and a
+  // stale cached confidence from an earlier low-confidence/null request must
+  // never leak into a later high-confidence request for the same accession.
+  const resolutionConfidence = normalizedQuery
+    ? mapResolutionConfidence(normalizedQuery.confidence, normalizedQuery.ambiguous)
+    : "ambiguous";
+
+  // Cache hit — reuse the GenPept-derived fields, but recompute resolutionConfidence
+  // fresh for this request. genPeptText is ignored on a cache hit.
   const cached = researchContextCache.get(cacheKey);
   if (cached) {
     return buildModuleResult({
       module: "protein-research-context",
       status: "success",
-      data: [cached],
+      data: [{ ...cached, resolutionConfidence }],
       error: null,
       startedAt,
     });
@@ -214,14 +225,14 @@ export async function getProteinResearchContext(
 
   try {
     // All derivation functions are pure — no network calls inside any of them.
+    // Note: resolutionConfidence is intentionally excluded from the cached
+    // object's frozen GenPept-derived fields and merged in per-request above/below.
     const context: ProteinResearchContext = Object.freeze({
       subject: proteinRecord,
       summary: deriveSummary(genPeptText),
       roleChips: deriveRoleChips(genPeptText),
       canonicalExplanation: deriveCanonicalExplanation(proteinRecord, transcriptRecord),
-      resolutionConfidence: normalizedQuery
-        ? mapResolutionConfidence(normalizedQuery.confidence, normalizedQuery.ambiguous)
-        : "ambiguous",
+      resolutionConfidence,
       annotationConfidence: computeAnnotationConfidence(genPeptText, proteinRecord),
       biologicalImportance: deriveBiologicalImportance(geneRecord),
       relationships: buildRelationships(geneRecord, transcriptRecord, proteinRecord),

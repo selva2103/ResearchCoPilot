@@ -17,7 +17,9 @@
  *      "DEFINITION  "), stripping the organism suffix in [brackets].
  *   5. If nothing substantive is found, return null.
  *
- * deriveRoleChips (source: "RefSeq GenPept KEYWORDS"):
+ * deriveRoleChips (sources: "RefSeq GenPept KEYWORDS" and
+ * "RefSeq GenPept FEATURES — Region/Site"):
+ *   KEYWORDS pass:
  *   1. Extract the KEYWORDS line(s): text after "KEYWORDS    " until the
  *      next top-level section header. Join continuation lines.
  *   2. Split the resulting string by "; " (semicolon-space).
@@ -28,13 +30,33 @@
  *      "MANE Select Plus Clinical", "Reference proteome"). These terms
  *      describe the record's curation status, not the protein's biological
  *      function, and must never be surfaced as if they were a role.
- *   5. Return the first 8 remaining non-empty terms. Each chip's source is
- *      "RefSeq GenPept KEYWORDS".
- *   6. If nothing remains after filtering, return [] — the UI omits the
- *      role-chips section entirely rather than showing metadata as if it
- *      were a biological role.
+ *   5. Each surviving term becomes a chip with source "RefSeq GenPept KEYWORDS".
+ *
+ *   FEATURES pass (audit-confirmed gap — FEATURES were previously unused
+ *   despite being specified as a source of role chips):
+ *   6. Parse the FEATURES table for `Region` and `Site` feature entries.
+ *   7. Region: take the `/region_name="..."` value, strip a trailing period
+ *      and any embedded `/evidence=...` fragment. Skip values matching
+ *      /^(interaction with|required for interaction with)/i — those name a
+ *      binding partner, not an intrinsic biological role, and skip anything
+ *      longer than 60 characters (motif/coordinate noise, not a short label).
+ *      Chip label: "Region: {region_name}". Source: "RefSeq GenPept FEATURES — Region".
+ *   8. Site: take the `/site_type="..."` value, skip the generic "other".
+ *      Distinct site types are de-duplicated (many individual residues share
+ *      the same site_type, e.g. dozens of "phosphorylation" sites collapse to
+ *      one chip). Chip label: "Site: {site_type}". Source:
+ *      "RefSeq GenPept FEATURES — Site".
+ *   9. Both passes de-duplicate case-insensitively against each other and
+ *      against the KEYWORDS chips already collected.
+ *
+ *   Combine + cap:
+ *   10. Concatenate KEYWORDS chips then FEATURES chips (Region before Site),
+ *       de-duplicated, and return the first 8.
+ *   11. If nothing remains after filtering across both passes, return [] —
+ *       the UI omits the role-chips section entirely rather than showing
+ *       metadata or noise as if it were a biological role.
  *   Note: never maintain a curated mapping of gene symbol → role. The chips
- *   are data-driven from the GenPept KEYWORDS field for this specific protein.
+ *   are data-driven from this specific protein's GenPept record only.
  *
  * computeAnnotationConfidence (internal evidence coverage signal):
  *   Signals scored (0 = absent, 1 = present):
@@ -63,10 +85,20 @@
  * deriveBiologicalImportance (source: "Gene Explorer NCBI Gene summary"):
  *   - If GeneRecord.omimId is null  → return null (no disease association known)
  *   - If GeneRecord.summary is null → return null (too sparse)
- *   - Extract the first sentence of GeneRecord.summary that is substantive
- *     (> 40 characters and not a generic filler like "This gene encodes a protein").
- *   - If no substantive sentence found → return null.
- *   - Otherwise: { text: <first substantive sentence>, source: <...> }
+ *   - This must answer "why researchers study this" (disease/OMIM significance),
+ *     NOT "what it does" (that's deriveSummary's job from the separate GenPept
+ *     COMMENT source). To avoid duplicating deriveSummary's typical opening
+ *     sentence (which is usually the generic protein-function sentence shared
+ *     by both GenPept COMMENT and the NCBI Gene summary's first sentence),
+ *     this function specifically looks for a disease/mutation-association
+ *     sentence rather than blindly taking the first substantive sentence.
+ *   - Scan GeneRecord.summary sentence by sentence (> 40 characters) and return
+ *     the first one that contains a disease/OMIM-association signal (matches
+ *     /mutation|disease|cancer|syndrome|disorder|associated with|deficiency/i)
+ *     and is not a generic filler opener.
+ *   - If no such disease-association sentence is found → return null (do NOT
+ *     fall back to a generic/duplicate sentence).
+ *   - Otherwise: { text: <first disease-association sentence>, source: <...> }
  *
  * buildRelationships:
  *   Returns the Gene → Transcript → Protein → Species chain using data
@@ -221,24 +253,146 @@ const NON_BIOLOGICAL_KEYWORD_TERMS = new Set(
   ].map((t) => t.toLowerCase())
 );
 
+/** Region /region_name values that name a binding partner rather than an
+ *  intrinsic biological role (e.g. "Interaction with CCAR2") — excluded from
+ *  role chips per the module JSDoc.
+ */
+const PARTNER_INTERACTION_RE = /^(interaction with|required for interaction with)/i;
+
+/** Site /site_type values that are too generic to serve as a role label. */
+const GENERIC_SITE_TYPES = new Set(["other"]);
+
+/**
+ * Extract Region/Site role-chip candidates directly from the raw FEATURES
+ * table text (line-oriented parse — FEATURES is a fixed-column GenPept table,
+ * not free text, so it is parsed independently of extractGenPeptField).
+ */
+function extractFeatureRoleChips(
+  genPeptText: string
+): { label: string; source: string }[] {
+  const featuresIdx = genPeptText.indexOf("FEATURES");
+  if (featuresIdx === -1) return [];
+  // FEATURES runs until the ORIGIN section (the raw sequence block).
+  const originIdx = genPeptText.indexOf("\nORIGIN", featuresIdx);
+  const featuresBlock =
+    originIdx === -1
+      ? genPeptText.slice(featuresIdx)
+      : genPeptText.slice(featuresIdx, originIdx);
+
+  const lines = featuresBlock.split("\n");
+
+  const regionNames: string[] = [];
+  const siteTypes: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const regionMatch = line.match(/^\s*Region\s+\S+/);
+    const siteMatch = line.match(/^\s*Site\s+\S+/);
+
+    if (regionMatch) {
+      // The /region_name qualifier may span multiple continuation lines
+      // (closing on the line containing the terminating quote).
+      let j = i + 1;
+      let raw = "";
+      let foundTag = false;
+      while (j < lines.length && /^\s{20,}/.test(lines[j])) {
+        const qualLine = lines[j].trim();
+        if (!foundTag) {
+          const tagMatch = qualLine.match(/^\/region_name="(.*)$/);
+          if (tagMatch) {
+            foundTag = true;
+            raw = tagMatch[1];
+            if (raw.endsWith('"')) break;
+          }
+        } else {
+          if (qualLine.startsWith("/")) break; // next qualifier — region_name closed without quote on same fragment
+          raw += " " + qualLine;
+          if (raw.includes('"')) break;
+        }
+        j++;
+      }
+      if (foundTag) {
+        const cleaned = raw.replace(/".*$/, "").replace(/\.$/, "").trim();
+        if (
+          cleaned.length > 1 &&
+          cleaned.length <= 60 &&
+          !PARTNER_INTERACTION_RE.test(cleaned)
+        ) {
+          regionNames.push(cleaned);
+        }
+      }
+    } else if (siteMatch) {
+      // Scan the full indented qualifier block for /site_type=, the same way
+      // Region scans for /region_name= — /site_type is not always the very
+      // first qualifier line (e.g. an /order(...) location continuation or
+      // another qualifier can precede it).
+      let j = i + 1;
+      while (j < lines.length && /^\s{20,}/.test(lines[j])) {
+        const qualLine = lines[j].trim();
+        const tagMatch = qualLine.match(/^\/site_type="([^"]*)"/);
+        if (tagMatch) {
+          const cleaned = tagMatch[1].trim();
+          if (cleaned.length > 1 && !GENERIC_SITE_TYPES.has(cleaned.toLowerCase())) {
+            siteTypes.push(cleaned);
+          }
+          break;
+        }
+        // Stop scanning once we reach the next feature's location line
+        // (unindented relative to qualifiers) — handled by the outer while
+        // condition already; here we just continue past non-matching quals.
+        j++;
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const chips: { label: string; source: string }[] = [];
+
+  for (const name of regionNames) {
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push({ label: `Region: ${name}`, source: "RefSeq GenPept FEATURES — Region" });
+  }
+  for (const type of siteTypes) {
+    const key = type.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push({ label: `Site: ${type}`, source: "RefSeq GenPept FEATURES — Site" });
+  }
+
+  return chips;
+}
+
 export function deriveRoleChips(
   genPeptText: string
 ): ProteinResearchContext["roleChips"] {
   const keywords = extractGenPeptField(genPeptText, "KEYWORDS");
-  if (!keywords || keywords === ".") return [];
 
-  const chips = keywords
-    .split(/;\s*/)
-    .map((k) => k.replace(/\.$/, "").trim())
-    .filter((k) => k.length > 1 && k !== ".")
-    .filter((k) => !NON_BIOLOGICAL_KEYWORD_TERMS.has(k.toLowerCase()));
+  const keywordChips: { label: string; source: string }[] = [];
+  if (keywords && keywords !== ".") {
+    const terms = keywords
+      .split(/;\s*/)
+      .map((k) => k.replace(/\.$/, "").trim())
+      .filter((k) => k.length > 1 && k !== ".")
+      .filter((k) => !NON_BIOLOGICAL_KEYWORD_TERMS.has(k.toLowerCase()));
+    for (const label of terms) {
+      keywordChips.push({ label, source: "RefSeq GenPept KEYWORDS" });
+    }
+  }
 
-  if (chips.length === 0) return [];
+  const featureChips = extractFeatureRoleChips(genPeptText);
 
-  return chips.slice(0, 8).map((label) => ({
-    label,
-    source: "RefSeq GenPept KEYWORDS",
-  }));
+  const seen = new Set<string>();
+  const combined: { label: string; source: string }[] = [];
+  for (const chip of [...keywordChips, ...featureChips]) {
+    const key = chip.label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combined.push(chip);
+  }
+
+  return combined.slice(0, 8);
 }
 
 // ─── deriveCanonicalExplanation ────────────────────────────────────────────────
@@ -390,14 +544,21 @@ export function deriveBiologicalImportance(
   // Requirement: only produce output when NCBI Gene curated summary is present.
   if (!geneRecord.summary || geneRecord.summary.trim().length < 30) return null;
 
-  // Extract the first sentence that is genuinely specific (>40 chars, not
-  // a generic opener). Generic openers like "This gene encodes a protein"
-  // are too vague — omit them per the spec's graceful-degradation rule.
+  // Generic openers like "This gene encodes a protein..." describe function,
+  // not disease significance — they belong to deriveSummary's territory and
+  // must never be surfaced here (that would duplicate Summary).
   const genericOpenings = [
     /^this gene encodes a protein\.?$/i,
     /^this gene encodes a (protein|enzyme|receptor)\s+that/i,
     /^the protein encoded by this gene/i,
   ];
+
+  // Biological Importance must answer "why researchers study this" — i.e. a
+  // disease/OMIM-association claim — not "what it does". Require an explicit
+  // disease/mutation-association signal so this can never collapse into a
+  // near-duplicate of deriveSummary's GenPept-sourced function sentence.
+  const diseaseAssociationSignal =
+    /mutation|disease|cancer|tumou?r(?!\s+suppressor\s+protein\b)|syndrome|disorder|associated with|deficiency|carcinoma|pathogenic|linked to|implicated in|susceptibility|predispos|risk of|causes?\s|caused by|malignan/i;
 
   const sentences = geneRecord.summary
     .split(/\.\s+/)
@@ -406,15 +567,16 @@ export function deriveBiologicalImportance(
 
   for (const sentence of sentences) {
     const isGeneric = genericOpenings.some((re) => re.test(sentence));
-    if (!isGeneric) {
-      return {
-        text: sentence.charAt(0).toUpperCase() + sentence.slice(1),
-        source: `Gene Explorer NCBI Gene summary (OMIM ref: ${geneRecord.omimId})`,
-      };
-    }
+    if (isGeneric) continue;
+    if (!diseaseAssociationSignal.test(sentence)) continue;
+    return {
+      text: sentence.charAt(0).toUpperCase() + sentence.slice(1),
+      source: `Gene Explorer NCBI Gene summary — disease association (OMIM ref: ${geneRecord.omimId})`,
+    };
   }
 
-  // All sentences were generic or too short — omit rather than fabricate.
+  // No genuine disease-association sentence found — omit rather than
+  // fabricate or fall back to a generic/duplicate function sentence.
   return null;
 }
 
