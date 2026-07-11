@@ -1,0 +1,92 @@
+[1mdiff --git a/artifacts/research-copilot/.next/app-build-manifest.json b/artifacts/research-copilot/.next/app-build-manifest.json[m
+[1mindex fa81859..5ee7eb5 100644[m
+[1m--- a/artifacts/research-copilot/.next/app-build-manifest.json[m
+[1m+++ b/artifacts/research-copilot/.next/app-build-manifest.json[m
+[36m@@ -10,6 +10,41 @@[m
+       "static/chunks/webpack.js",[m
+       "static/chunks/main-app.js",[m
+       "static/chunks/app/page.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/analyze/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/analyze/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/protein/detail/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/protein/detail/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/transcript/summary/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/transcript/summary/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/protein/research-context/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/protein/research-context/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/protein/summaries/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/protein/summaries/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/transcript/download/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/transcript/download/route.js"[m
+[32m+[m[32m    ],[m
+[32m+[m[32m    "/api/protein/download/route": [[m
+[32m+[m[32m      "static/chunks/webpack.js",[m
+[32m+[m[32m      "static/chunks/main-app.js",[m
+[32m+[m[32m      "static/chunks/app/api/protein/download/route.js"[m
+     ][m
+   }[m
+ }[m
+\ No newline at end of file[m
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/0.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/0.pack.gz[m
+[1mindex d095dc9..d01d7a3 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/0.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/0.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/2.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/2.pack.gz[m
+[1mindex d56dec0..d346908 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/2.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/2.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/3.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/3.pack.gz[m
+[1mindex d43f842..cc0c80e 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/3.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/3.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/5.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/5.pack.gz[m
+[1mindex 1d17ca2..02418d5 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/5.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/5.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/7.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/7.pack.gz[m
+[1mindex 349c957..b3eefe4 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/7.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/7.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz b/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz[m
+[1mindex 08b3377..717b034 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz.old b/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz.old[m
+[1mindex fff2f1d..e35e2ed 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz.old and b/artifacts/research-copilot/.next/cache/webpack/client-development/index.pack.gz.old differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/13.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/13.pack.gz[m
+[1mindex 4b75fc5..bc2bc28 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/13.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/13.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/14.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/14.pack.gz[m
+[1mindex 8b2419f..65c32b4 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/14.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/14.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/15.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/15.pack.gz[m
+[1mindex 3447d7e..6e033b2 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/15.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/15.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/16.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/16.pack.gz[m
+[1mindex 3bfb39a..6e626e2 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/16.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/16.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/17.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/17.pack.gz[m
+[1mindex 480d3d4..f0a20e0 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/17.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/17.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/6.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/6.pack.gz[m
+[1mindex d4aa97e..92e0cf8 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/6.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/6.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/7.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/7.pack.gz[m
+[1mindex 45d9966..23b452e 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/7.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/server-development/7.pack.gz differ
+[1mdiff --git a/artifacts/research-copilot/.next/cache/webpack/server-development/9.pack.gz b/artifacts/research-copilot/.next/cache/webpack/server-development/9.pack.gz[m
+[1mindex 2d8c7e1..038c760 100644[m
+Binary files a/artifacts/research-copilot/.next/cache/webpack/server-development/9.pack.gz and b/artifacts/research-copilot/.next/cache/webpack/s

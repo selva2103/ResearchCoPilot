@@ -1,3 +1,5 @@
 {
-  "/page": "app/page.js"
+  "/api/protein/research-context/route": "app/api/protein/research-context/route.js",
+  "/api/analyze/route": "app/api/analyze/route.js",
+  "/api/protein/detail/route": "app/api/protein/detail/route.js"
 }
