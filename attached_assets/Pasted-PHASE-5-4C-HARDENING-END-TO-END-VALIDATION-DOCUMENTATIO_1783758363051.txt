@@ -1,0 +1,249 @@
+PHASE 5.4C — HARDENING, END-TO-END VALIDATION & DOCUMENTATION
+
+PROJECT CONTEXT — READ FIRST
+
+This repository is already updated to the latest GitHub commit. Pull
+latest before starting.
+
+This phase is a HARDENING AND VERIFICATION phase, not a feature phase.
+Per the original Phase 5.4 roadmap revision, Phase 5.4C's scope is
+specifically: end-to-end validation across the full resolved chain,
+cross-species validation, download validation, error-state testing, and
+final documentation — before Variant Explorer (5.5) begins. Do NOT add
+new functionality, new fields, or new UI in this phase.
+
+Completed phases (do NOT rebuild any of these):
+- PubMed Explorer, GEO Explorer, Universal Pagination
+- Sequence Foundation (5.1)
+- Biological Query Resolver (Phase R), including the case-sensitive
+  species symbol resolution patch (bare "Trp53" → mouse, "Tp53" → rat,
+  "TP53" → human, all confirmed working)
+- Gene Explorer (5.2)
+- Transcript Explorer (5.3A/B/C)
+- Protein Explorer Foundation (5.4A) — ProteinRecord, canonical
+  inheritance from MANE, NP_/XP_ status, FASTA download, Redis caching
+- Protein Research Context (5.4B), including the confirmed audit fixes:
+  Resolution Confidence correctly wired, Biological Importance correctly
+  distinct from Summary (OMIM-grounded), role chips now include
+  FEATURES-derived regions/sites in addition to KEYWORDS
+
+--------------------------------------------------
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint before making any change.
+2. After each step below, run TypeScript compilation and the existing
+   build. Fix regressions immediately — never proceed with a broken
+   build.
+3. If a step already passes, document it and do NOT rewrite the code.
+   Only modify files when a real bug is confirmed, a regression is
+   found, or hardening is specifically required by this prompt.
+4. Do NOT modify: PubMed, GEO, Sequence Foundation, the Biological Query
+   Resolver's core logic (only verify it, do not change it further —
+   the case-sensitivity patch is already complete), Python FastAPI,
+   Redis, AI-generated sections.
+5. Never commit code that does not compile.
+
+--------------------------------------------------
+
+FIRST ACTION — ESTABLISH CURRENT STATE
+
+1. Check whether PHASE-R-PATCH-REPORT.md, PHASE-5.4A-FINAL-REPORT.md,
+   PHASE-5.4B-FINAL-REPORT.md, and PHASE-5.4B-AUDIT-REPORT.md exist in
+   the repo root. If they exist, read and trust them as your starting
+   state — do not re-verify anything they already confirm.
+2. If any are missing or incomplete, reconstruct minimal state by
+   reading: lib/resolver/ (entry points), lib/gene/, lib/transcript/,
+   lib/protein/ (including research-context.ts), types/normalized-query.ts,
+   types/gene-record.ts, types/transcript-record.ts,
+   types/protein-record.ts, types/research-context.ts.
+3. Do NOT re-read unrelated repository files once state is established.
+
+--------------------------------------------------
+
+STEP 1 — END-TO-END VALIDATION (Gene → Transcript → Protein → Research
+Context)
+
+For each of the following, trace and confirm the FULL chain resolves
+correctly and consistently — the same GeneID must flow unchanged from
+resolver through to Research Context, with no independent re-resolution
+at any step (per Phase R's Pipeline Invariant and Identifier Immutability
+Rule):
+
+1. TP53 (human, canonical, well-annotated) — full chain from query to
+   Research Context, confirm every layer shows consistent identifiers.
+2. BRCA2 (human, large gene, multiple isoforms) — confirm canonical vs.
+   non-canonical protein handling is consistent end-to-end.
+3. A gene with sparse/predicted (XP_) protein data — confirm the chain
+   degrades gracefully (Annotation Confidence "limited"/"unavailable")
+   without breaking anywhere downstream.
+
+Report the actual GeneID, TranscriptRecord accession, ProteinRecord
+accession, and confirm ProteinResearchContext's `relationships` field
+matches all of the above exactly, for each of the 3 cases.
+
+--------------------------------------------------
+
+STEP 2 — CROSS-SPECIES VALIDATION
+
+Using the now-fixed case-sensitive species resolution:
+1. "TP53" (bare, human) → confirm full chain resolves to human TP53,
+   canonical protein correctly flagged, MANE-based explanation shown.
+2. "Trp53" (bare, mouse convention) → confirm full chain resolves to
+   Mus musculus Trp53 (GeneID 22059), confirm canonical designation
+   correctly shows "does not apply" (null, not false) throughout Gene
+   Explorer, Transcript Explorer, and Research Context.
+3. "Tp53" (bare, rat convention) → confirm full chain resolves to
+   Rattus norvegicus Tp53 (GeneID 24842), same canonical-null handling
+   as mouse.
+4. Confirm explicit-organism queries ("Trp53 Mus musculus", "TP53
+   human") remain unaffected and produce identical results to the
+   bare-symbol equivalents above.
+5. Confirm no cross-species data leakage anywhere in the chain — e.g.
+   mouse Research Context never shows human-specific canonical language
+   or human GeneID/accessions.
+
+--------------------------------------------------
+
+STEP 3 — DOWNLOAD VALIDATION
+
+1. Transcript FASTA and CDS downloads (5.3) — confirm still functional,
+   correct filenames, correct content, for both a curated (NM_) and
+   predicted (XM_) transcript.
+2. Protein FASTA downloads (5.4A) — confirm still functional for a
+   canonical protein, a non-canonical isoform, and a predicted (XP_)
+   protein.
+3. Confirm all downloads remain rate-limited through the existing
+   shared Entrez limiter — no concurrent unthrottled requests possible
+   by rapid-clicking multiple download buttons across transcripts/
+   proteins.
+4. Confirm Redis cache keys are still correctly separated:
+   protein:summary/detail/fasta (5.4A) vs.
+   researchcontext:protein:{accessionVersion} (5.4B) — no collisions,
+   no cross-contamination between raw and derived data.
+
+--------------------------------------------------
+
+STEP 4 — ERROR-STATE TESTING
+
+Confirm graceful, non-crashing behavior for each of the following,
+across Gene Explorer, Transcript Explorer, Protein Explorer, and
+Research Context:
+1. Query with no matching gene at all → clear "no results" state, no
+   crash, no partial/broken UI.
+2. Ambiguous query with multiple candidates (e.g. "BRCA") → candidate
+   list still renders correctly, selecting one still triggers the full
+   chain correctly for that specific GeneID.
+3. Non-coding transcript (NR_/XR_) → confirm "Non-coding transcript —
+   no protein" state still displays correctly, Research Context section
+   does not attempt to render for these.
+4. A deliberately invalid/retired protein accession (if simulable) →
+   confirm Protein Explorer and Research Context both show a handled
+   error state with retry, not an unhandled exception.
+5. Simulate a Research Context derivation failure (e.g. malformed
+   GenPept response) while the underlying ProteinRecord succeeds →
+   confirm identifiers/FASTA still display normally, only the Research
+   Context section shows "Context unavailable," per the existing
+   error-state design from 5.4B.
+6. Rate limit hit during rapid downloads → confirm the existing
+   "NCBI rate limit reached, please wait a moment" message (or
+   equivalent) still surfaces correctly rather than a silent failure.
+
+--------------------------------------------------
+
+STEP 5 — TARGETED REGRESSION TESTING
+
+Do NOT re-run full validation suites for PubMed, GEO, or Sequence
+Foundation unless a regression is actually observed. Only verify:
+- PubMed: "TP53" paper count unchanged.
+- GEO: "TP53" dataset count unchanged.
+- Gene Explorer: TP53, BRCA2, mouse Trp53, rat Tp53 — Gene ID,
+  chromosome, and organism all correct (per Steps 1–2 above, no need to
+  repeat, just confirm no regression from those).
+- TypeScript: zero errors.
+- No Python files modified.
+- No AI-generated sections modified.
+
+If any regression is found here, extend testing to the specific affected
+module only — do not broaden scope beyond what's needed to find the root
+cause.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any bug is found during Steps 1–5:
+1. Explain the root cause.
+2. Fix immediately, with the smallest targeted change possible.
+3. Re-run the affected test.
+4. Continue only after it passes.
+Do not leave known bugs undocumented or unresolved.
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits run low before this phase is complete:
+1. Finish the current file/edit — never leave a syntactically broken
+   file.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit immediately.
+4. Write PHASE-5.4C-PARTIAL-REPORT.md containing: completed steps,
+   remaining steps, files modified (if any), and the exact next step.
+
+--------------------------------------------------
+
+STEP 6 — FINAL DOCUMENTATION
+
+Write PHASE-5.4C-FINAL-REPORT.md. Write it as if the reader has never
+seen this conversation — this becomes the entry document for Phase 5.5
+(Variant Explorer):
+
+1. Complete file structure — all paths across Phase R, 5.4A, and 5.4B
+   that are relevant to the resolved chain (list only, do not re-paste
+   file contents).
+2. End-to-end chain confirmation — the full Resolver → GeneID → Gene →
+   Transcript → Protein → Research Context flow, with the 3 cases from
+   Step 1 as concrete evidence.
+3. Cross-species validation results (Step 2) with actual GeneIDs/TaxIDs
+   shown for human, mouse, and rat.
+4. Download validation results (Step 3) with actual evidence.
+5. Error-state handling results (Step 4) with actual evidence for each
+   of the 6 scenarios.
+6. Known limitations — document explicitly, do not omit (e.g. any
+   organisms/genes where data is consistently sparse, any error states
+   that degrade less gracefully than others).
+7. Phase 5.5 entry point — exactly which existing types/fields Variant
+   Explorer should consume (GeneID, TranscriptRecord, ProteinRecord,
+   ProteinResearchContext's `relationships`), and which NCBI
+   endpoints/databases it will likely need that aren't yet used
+   anywhere in this app (e.g. ClinVar, dbSNP) — informational only, not
+   an instruction to build anything now.
+8. Architecture summary — one paragraph on how the full chain connects
+   today, for a reader who has not seen any prior phase's prompts.
+
+--------------------------------------------------
+
+FINAL REPORT CHECKLIST
+
+Confirm explicitly, yes or no (not assumed) — list any "no" with reason:
+- [ ] All end-to-end validation cases (Step 1) pass
+- [ ] All cross-species validation cases (Step 2) pass, including the
+      case-sensitivity fix holding correctly for human/mouse/rat
+- [ ] All download validation cases (Step 3) pass
+- [ ] All error-state cases (Step 4) pass
+- [ ] No regressions found in Step 5, or all found regressions were
+      fixed and re-verified
+- [ ] No new functionality was added in this phase
+- [ ] No Python changes, no AI-generated section changes
+- [ ] TypeScript passes with zero errors
+- [ ] Variant Explorer (5.5) can begin cleanly from this state
+- [ ] Any remaining known limitations are documented in
+      PHASE-5.4C-FINAL-REPORT.md
+
+STOP. Do NOT implement Variant Explorer (5.5) or any later phase in this
+session.
+Commit PHASE-5.4C-FINAL-REPORT.md only if TypeScript passes and every
+item in the Final Report Checklist above is confirmed or explicitly
+explained.
+Do not commit broken code.
