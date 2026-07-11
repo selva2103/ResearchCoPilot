@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p $PORT -H 0.0.0.0",
+    "dev": "next dev -p ${PORT:-5000} -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p $PORT -H 0.0.0.0",
     "typecheck": "tsc --noEmit"
