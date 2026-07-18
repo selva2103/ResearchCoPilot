@@ -1,0 +1,209 @@
+PHASE 5.4C — CONTINUATION (Fresh Session / Different Account)
+
+PROJECT CONTEXT — READ FIRST
+
+This is a CONTINUATION of an in-progress Phase 5.4C hardening/validation
+session, resumed on a different Replit AI account because the original
+account's monthly quota was exhausted. You have not seen the prior
+session. Do not trust any external status summary at face value —
+verify the actual repository state yourself before proceeding.
+
+Pull the latest GitHub commit before doing anything else.
+
+Phase 5.4C's purpose: validate and harden the completed Protein Explorer
+(5.4A) and Protein Research Context (5.4B) — end-to-end chain
+validation, cross-species validation, download validation, error-state
+testing, targeted regression, documentation, and a final git tag. No new
+functionality is to be added in this phase.
+
+--------------------------------------------------
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint (commit or branch) before making any change.
+2. After completing each step below, run TypeScript compilation. Fix
+   regressions immediately — never proceed with a broken build.
+3. Prefer minimal, targeted changes. Do not modify Protein Explorer's
+   (5.4A) or Research Context's (5.4B) derivation logic unless a genuine
+   bug is confirmed during this session.
+4. Never commit code that does not compile.
+
+--------------------------------------------------
+
+FIRST ACTION — VERIFY ACTUAL STATE (do not trust claimed status)
+
+A prior session reported the following. Treat this as a claim to
+verify, not a fact:
+- All four phase reports exist and are consistent (PHASE-R-PATCH-REPORT.md,
+  PHASE-5.4A-FINAL-REPORT.md, PHASE-5.4B-FINAL-REPORT.md,
+  PHASE-5.4B-AUDIT-REPORT.md).
+- A git checkpoint was created at the start of this session.
+- End-to-end chain validation and cross-species validation were run in
+  parallel and reportedly passed ("all base queries resolve correctly,
+  TypeScript clean").
+- Deeper chain traces (transcript/protein accessions), download checks,
+  and remaining error states were being tested in parallel.
+- During validation, the prior session discovered that the
+  research-context API route uses `accession + baseRecord` fields, not
+  `proteinRecord` — and "corrected the validation calls" for this.
+- Three research-context API calls reportedly returned `status: success`.
+- The session was mid-way through "completing remaining error states in
+  parallel" when the account's quota was exhausted — this work was NOT
+  confirmed complete.
+- No PHASE-5.4C-FINAL-REPORT.md was mentioned as written.
+- No git tag was mentioned as created.
+
+Do this before writing any code or re-running any validation:
+1. Confirm the four prior phase reports actually exist and read them.
+2. Run `git status` and `git diff HEAD`. Document any uncommitted
+   modifications. This specifically matters here because the prior
+   session mentioned "correcting the validation calls" right before
+   hitting quota — determine whether that correction was:
+   a) a fix to a test/validation script only, or
+   b) a change to actual application/production code (e.g. the
+      research-context API route itself).
+   If (b), inspect the change carefully before trusting it — it was
+   made under time pressure right before the session ended.
+3. Run TypeScript compilation now to establish a true baseline —
+   do not assume "TypeScript clean" from the prior session still holds.
+4. Check whether PHASE-5.4C-FINAL-REPORT.md or
+   PHASE-5.4C-PARTIAL-REPORT.md exists. If a partial report exists, read
+   it as the authoritative status. If neither exists, you must
+   reconstruct what was actually validated by re-running the checks
+   below yourself — do not assume the chat-log summary above is complete
+   or accurate.
+5. Write CURRENT-STATE-NOTES-5.4C-CONTINUATION.md documenting exactly
+   what you found in steps 1–4 before proceeding to any further
+   validation work.
+
+Do NOT re-read unrelated repository files beyond what's needed for this
+verification.
+
+--------------------------------------------------
+
+REMAINING WORK — RE-VERIFY THEN COMPLETE
+
+Step 1 — End-to-end chain validation (claimed complete — spot-check
+only, do not fully redo unless FIRST ACTION found a discrepancy):
+- TP53 (human), BRCA2 (human, multi-isoform), one sparse/predicted (XP_)
+  protein → confirm GeneID → TranscriptRecord → ProteinRecord →
+  ProteinResearchContext chain is consistent for each.
+
+Step 2 — Cross-species validation (claimed complete — spot-check only):
+- Bare "TP53", "Trp53", "Tp53" → confirm human/mouse/rat resolve
+  correctly (per the Phase R case-sensitivity patch) and the full
+  chain reflects the correct organism throughout, including Research
+  Context's canonical-status text.
+
+Step 3 — Download validation (was IN PROGRESS — verify what was
+actually tested vs. only claimed, then complete anything missing):
+1. Transcript FASTA and CDS downloads — curated (NM_) and predicted
+   (XM_) transcript.
+2. Protein FASTA downloads — canonical, non-canonical isoform, and
+   predicted (XP_) protein.
+3. Rate limiter concurrency test — rapid-click Download FASTA on two+
+   different transcripts/proteins in quick succession, confirm proper
+   throttling through the shared limiter.
+4. Cache namespace check — confirm `protein:summary/detail/fasta:{...}`
+   and `researchcontext:protein:{...}` remain separate, no collisions.
+
+Step 4 — Error-state testing (was IN PROGRESS when quota was exhausted
+— determine exactly which of these 6 were actually verified vs. still
+pending, then complete the remainder):
+1. Query with no matching gene at all → clear "no results" state.
+2. Ambiguous query with multiple candidates (e.g. "BRCA") → candidate
+   list renders correctly, selecting one triggers the full chain
+   correctly for that specific GeneID.
+3. Non-coding transcript (NR_/XR_) → "Non-coding transcript — no
+   protein" state displays correctly, Research Context does not attempt
+   to render.
+4. A deliberately invalid/retired protein accession (if simulable) →
+   handled error state with retry, not an unhandled exception.
+5. Simulate a Research Context derivation failure while the underlying
+   ProteinRecord succeeds → identifiers/FASTA still display normally,
+   only Research Context shows "Context unavailable."
+6. Rate limit hit during rapid downloads → the existing rate-limit
+   message surfaces correctly, not a silent failure.
+
+Step 5 — Targeted regression (claimed partially done — verify, complete
+if gaps found):
+- PubMed: "TP53" paper count unchanged.
+- GEO: "TP53" dataset count unchanged.
+- TypeScript: zero errors (per the true baseline from FIRST ACTION,
+  not the prior session's claim).
+- No Python files modified. No AI-generated sections modified.
+- If the research-context route was actually modified (per FIRST ACTION
+  step 2), specifically re-verify it against 5.4B's Immutability Rule
+  and "zero new API calls" constraint — a fix made right before a
+  session ended under quota pressure deserves extra scrutiny.
+
+--------------------------------------------------
+
+BUG FIX POLICY
+
+If any bug is found: explain the root cause, fix with the smallest
+targeted change, re-run the affected test, continue only after it
+passes. Do not leave known bugs undocumented.
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits run low before this session completes:
+1. Finish the current file/edit — never leave a syntactically broken
+   file, especially given what happened in the prior session.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit immediately — do not leave uncommitted edits sitting in the
+   workspace, particularly anything touching production code.
+4. Write PHASE-5.4C-PARTIAL-REPORT.md containing: completed work,
+   remaining work, files modified, and the exact next implementation
+   step — be precise about which of Steps 1–5 and which specific
+   error-state scenarios were and weren't verified.
+
+--------------------------------------------------
+
+STEP 6 — FINAL DOCUMENTATION
+
+Write PHASE-5.4C-FINAL-REPORT.md (only once Steps 1–5 above are fully
+verified, not just claimed):
+1. FIRST ACTION findings — explicitly note any discrepancy between the
+   prior session's claimed status and the actual repository state,
+   including whether the research-context route fix was to test code or
+   production code.
+2. End-to-end and cross-species validation results with actual evidence.
+3. Download validation results with actual evidence.
+4. Error-state handling results for all 6 scenarios with actual
+   evidence.
+5. Regression results with actual evidence.
+6. Known limitations, if any.
+7. Confirm: Protein Explorer (5.4A + 5.4B) is now considered frozen and
+   production-ready; Phase 5.5 (Variant & Clinical Evidence Explorer)
+   can begin cleanly from this state.
+
+--------------------------------------------------
+
+STEP 7 — GIT TAG
+
+Once TypeScript passes and every item below is confirmed, create a git
+tag: `v5.4-complete`. Report its exact commit hash in the final report.
+
+--------------------------------------------------
+
+FINAL REPORT CHECKLIST
+
+- [ ] FIRST ACTION verification complete, discrepancies (if any) documented
+- [ ] End-to-end chain validation confirmed (re-verified, not assumed)
+- [ ] Cross-species validation confirmed (re-verified, not assumed)
+- [ ] All download validation cases pass
+- [ ] All 6 error-state cases pass
+- [ ] No regressions, or all found regressions fixed and re-verified
+- [ ] TypeScript passes with zero errors
+- [ ] No Python changes, no AI-generated section changes
+- [ ] git tag `v5.4-complete` created
+- [ ] Variant & Clinical Evidence Explorer (5.5) can begin cleanly from
+      this state
+
+STOP. Do NOT implement Phase 5.5 or any later phase in this session.
+Commit PHASE-5.4C-FINAL-REPORT.md and the git tag only after TypeScript
+passes and every item in the Final Report Checklist above is confirmed.
+Do not commit broken code.
