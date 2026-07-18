@@ -1,29 +1,38 @@
 ---
-name: Artifact path-router registration for new API routes
-description: New Next.js API routes return 404 through the public/preview domain even though they work on localhost, unless registered in artifact.toml's paths list.
+name: Artifact path-router registration
+description: Every Next.js API route in research-copilot must be listed in artifact.toml paths or the path router sends browser requests to the api-server (which claims /api broadly).
 ---
 
-When `router = "path"` in an artifact's `.replit-artifact/artifact.toml`, the
-`[[services]] paths = [...]` list is an explicit allow-list the platform proxy
-uses to decide which service handles a given URL. Any path not listed there —
-even a normal Next.js `app/api/**/route.ts` that works fine when curled
-directly against the app's own port — falls through to whichever *other*
-artifact's path claim is broader (e.g. a sibling API-server artifact claiming
-the generic `/api` prefix). That sibling then returns its own framework's
-default 404 (e.g. Express's `Cannot GET ...`), which looks identical to a
-routing bug in application code but isn't one.
+# Artifact Path-Router Registration
 
-**Why:** Diagnosed for ResearchCoPilot's Transcript Explorer — `/api/transcript/download`
-and `/api/transcript/summary` returned 200 on `localhost:<port>` but 404 (with
-`x-powered-by: Express`) through the public dev domain, because they were
-missing from `artifact.toml`'s `paths` array while a separate bare Express
-`api-server` artifact claimed `/api` broadly and had no matching route.
+## The Rule
 
-**How to apply:** When a new API route under a Next.js (or similar) artifact
-returns 404 only through the public/preview domain (not on the app's own
-localhost port), check `artifacts/<name>/.replit-artifact/artifact.toml` for
-a `paths` list before assuming the route code itself is broken. `artifact.toml`
-cannot be edited directly — write the updated TOML to a sibling
-`artifact.edit.toml` file and call `verifyAndReplaceArtifactToml` (exposed as
-a callback in the `code_execution` sandbox) to apply it, then restart the
-artifact's workflow.
+Every Next.js API route in `artifacts/research-copilot` must be explicitly listed in:
+`artifacts/research-copilot/.replit-artifact/artifact.toml` under `services[web].paths`
+
+Example:
+```toml
+paths = ["/", "/api/analyze", "/api/variant/list", ...]
+```
+
+## Why
+
+The Replit path router uses `artifact.toml` paths lists to route incoming requests to the correct service. The `api-server` artifact claims the broad prefix `paths = ["/api"]`. Research-copilot's paths list is more specific, so any `/api/*` route NOT listed there gets routed to the api-server instead of the Next.js app — producing a 404.
+
+## How to Apply
+
+When adding any new route like `app/api/foo/bar/route.ts` to research-copilot, also add `/api/foo/bar` to the paths list in the artifact.toml. This must be done before the route will work in the browser.
+
+## False Positive Risk
+
+Smoke tests that call `localhost:{PORT}` directly (e.g. `curl http://localhost:5000/api/foo/bar`) bypass the path router entirely and will pass even when the route is NOT registered. Tests must use the proxied public URL to exercise the full router stack, or registration gaps will go undetected until a real browser request exposes them.
+
+This gap caused the Phase 5.5A fix session: `/api/variant/list` was omitted from the paths list, and all `curl localhost:5000` smoke tests passed while the browser UI showed 404.
+
+## Current paths list (as of Phase 5.5A fix session)
+
+```
+"/", "/api/analyze", "/api/pubmed-test", "/api/transcript/download",
+"/api/transcript/summary", "/api/protein/summaries", "/api/protein/detail",
+"/api/protein/download", "/api/protein/research-context", "/api/variant/list"
+```
