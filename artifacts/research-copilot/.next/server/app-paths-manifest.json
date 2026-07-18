@@ -1,9 +1,4 @@
 {
-  "/api/analyze/route": "app/api/analyze/route.js",
-  "/api/transcript/summary/route": "app/api/transcript/summary/route.js",
-  "/api/protein/detail/route": "app/api/protein/detail/route.js",
-  "/api/protein/research-context/route": "app/api/protein/research-context/route.js",
-  "/api/protein/summaries/route": "app/api/protein/summaries/route.js",
-  "/page": "app/page.js",
-  "/results/page": "app/results/page.js"
+  "/api/variant/list/route": "app/api/variant/list/route.js",
+  "/page": "app/page.js"
 }

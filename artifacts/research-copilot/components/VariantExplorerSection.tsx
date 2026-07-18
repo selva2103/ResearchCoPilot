@@ -84,7 +84,28 @@ function variantTypeBadgeColor(variantType: string | null): string {
   if (t.includes("insertion")) return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200";
   if (t.includes("indel")) return "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200";
   if (t.includes("duplication")) return "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200";
+  if (t.includes("copy number")) return "bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-200";
   return "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300";
+}
+
+/**
+ * Map ClinVar raw variant type strings to human-readable abbreviations.
+ * Raw ClinVar strings are lowercase and verbose (e.g. "single nucleotide variant").
+ * Displayed in the colored badge only — raw value still used for filtering.
+ */
+function variantTypeLabel(variantType: string | null): string {
+  if (!variantType) return "Unknown";
+  const t = variantType.toLowerCase();
+  if (t.includes("single nucleotide")) return "SNV";
+  if (t === "indel") return "Indel";
+  if (t.includes("deletion")) return "Deletion";
+  if (t.includes("insertion")) return "Insertion";
+  if (t.includes("duplication")) return "Duplication";
+  if (t.includes("copy number variant") || t.includes("copy number variation")) return "CNV";
+  if (t.includes("inversion")) return "Inversion";
+  if (t.includes("microsatellite")) return "Microsatellite";
+  // Fallback: title-case the raw string
+  return variantType.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function LoadingSpinner() {
@@ -127,8 +148,9 @@ function VariantRow({ variant }: { variant: VariantRecord }) {
             className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${variantTypeBadgeColor(
               variant.variantType
             )}`}
+            title={variant.variantType ?? undefined}
           >
-            {variant.variantType}
+            {variantTypeLabel(variant.variantType)}
           </span>
         )}
         <span className="text-xs text-slate-700 dark:text-slate-300 font-mono leading-relaxed break-all">
