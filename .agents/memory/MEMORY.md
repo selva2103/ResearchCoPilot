@@ -8,3 +8,4 @@
 - [Protein ESummary direct accession](protein-esummary-direct-accession.md) — db=protein ESummary accepts accession.version strings directly; no ESearch/ELink UID step needed. GenPept field locations confirmed for NP_000537.3.
 - [Genbank classifyQuery case sensitivity](genbank-classify-query.md) — lowercase gene symbols need digit-gate to avoid misrouting organism names; dispatch uppercases before NCBI ESearch.
 - [Resolver gene-vs-disease ranking](resolver-gene-ranking.md) — gene step now case-insensitive (digit-gated lowercase path); disease gate blocks MedGen for bare numeric gene symbols.
+- [ClinVar Variant Foundation](clinvar-variant-foundation.md) — Phase 5.5A API quirks: sort=clinical_significance is a no-op, EFetch VCV returns empty, single consequence per ESummary record, rsID uses [RS] field.
