@@ -210,8 +210,15 @@ export interface GeneRecord {
     estimatedCount: number | null;
   };
 
-  /** Variant annotation availability flag. Phase 5.5+. Not clickable in Phase 5.2. */
-  variants: { available: boolean };
+  /**
+   * Variant annotation availability flag + count (Phase 5.5A).
+   *   available: true when ClinVar likely has variants for this gene (heuristic —
+   *              set to true for all annotated human genes in Phase 5.5A).
+   *   count:     total ClinVar variant count. null until fetched lazily by the
+   *              Variant Explorer UI via POST /api/variant/list.
+   *              Populated with ModuleResult.totalCount from the first page fetch.
+   */
+  variants: { available: boolean; count: number | null };
 
   /** Gene expression availability flag. Phase 5.6+. Not clickable in Phase 5.2. */
   expression: { available: boolean };

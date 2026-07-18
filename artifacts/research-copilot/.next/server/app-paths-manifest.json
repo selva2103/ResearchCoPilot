@@ -1,3 +1,5 @@
 {
+  "/api/variant/list/route": "app/api/variant/list/route.js",
+  "/api/analyze/route": "app/api/analyze/route.js",
   "/page": "app/page.js"
 }

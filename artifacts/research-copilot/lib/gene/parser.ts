@@ -155,7 +155,7 @@ export function parseGeneRecord(
     omimUrl,
     transcripts,
     proteins,
-    variants: { available: true },    // ClinVar likely has variants for any annotated gene
+    variants: { available: true, count: null },    // ClinVar count fetched lazily by Variant Explorer (Phase 5.5A)
     expression: { available: true },   // GEO / Bgee likely has expression data
     pathways: { available: false },    // Phase 5.7+
     resolutionPath,

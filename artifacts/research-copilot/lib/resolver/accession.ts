@@ -44,6 +44,24 @@
 import type { QueryResolution, QueryType } from "@/types/query-resolution";
 import { toConfidenceTier } from "@/types/query-resolution";
 
+// ─── Variant identifier patterns (Phase 5.5A) ─────────────────────────────────
+
+/**
+ * rsID pattern: "rs" followed by 1+ digits (case-insensitive).
+ * Captures the digit portion only (group 1) for storage as rsId.
+ * Examples: rs28934578, RS28934578 (normalized to digits only)
+ */
+const RE_RSID = /^rs(\d+)$/i;
+
+/**
+ * ClinVar VCV accession: "VCV" followed by 1+ digits (case-insensitive).
+ * Captures the digit portion only (group 1) for numeric ID extraction.
+ * Examples: VCV000012375, VCV004856711
+ * NOTE: VCV[Accession] NCBI ESearch does NOT work (confirmed 2026-07-11).
+ *   Use the stripped numeric ID with [Variation ID] instead.
+ */
+const RE_VCV = /^VCV(\d+)$/i;
+
 // ─── Regex patterns ───────────────────────────────────────────────────────────
 
 // Chromosome-level RefSeq (complete genomic molecules)
@@ -153,6 +171,55 @@ export function classifyAccession(
     resolutionPath: `accession-pattern:${prefix}`,
     notes: `Recognized as ${cls.label} by accession prefix pattern (no API call required).`,
   };
+}
+
+// ─── Variant identifier classification (Phase 5.5A) ───────────────────────────
+
+export interface VariantIdentifierClassification {
+  kind: "rsid" | "vcv";
+  /** rsID digits only (without "rs" prefix). Populated for kind="rsid". */
+  rsId: string | null;
+  /** Numeric ClinVar Variation ID (digits only). Populated for both kinds. */
+  clinvarVariationId: string | null;
+  /** Full VCV accession string (e.g. "VCV000012375"). Populated for kind="vcv". */
+  clinvarAccession: string | null;
+}
+
+/**
+ * Attempt to classify the query as a variant identifier (rsID or VCV accession).
+ * Returns a classification when matched, null otherwise.
+ *
+ * Confidence is always 0.97 — regex pattern matching is unambiguous.
+ * Zero API calls.
+ */
+export function classifyVariantIdentifier(
+  query: string
+): VariantIdentifierClassification | null {
+  const q = query.trim();
+
+  const rsMatch = q.match(RE_RSID);
+  if (rsMatch) {
+    return {
+      kind: "rsid",
+      rsId: rsMatch[1], // digits only, no "rs" prefix
+      clinvarVariationId: null, // resolved at retrieval time (one ESearch call)
+      clinvarAccession: null,
+    };
+  }
+
+  const vcvMatch = q.match(RE_VCV);
+  if (vcvMatch) {
+    // Strip leading zeros: "VCV000012375" → clinvarVariationId = "12375"
+    const numericId = String(parseInt(vcvMatch[1], 10));
+    return {
+      kind: "vcv",
+      rsId: null,
+      clinvarVariationId: numericId,
+      clinvarAccession: q.toUpperCase(), // normalize to uppercase
+    };
+  }
+
+  return null;
 }
 
 // ─── Re-export for use in the resolver index ──────────────────────────────────

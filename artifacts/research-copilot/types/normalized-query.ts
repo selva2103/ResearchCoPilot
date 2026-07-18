@@ -48,6 +48,22 @@ export interface NormalizedQuery {
     accession: string;
   } | null;
 
+  /**
+   * Variant identifier extracted from the user query (Phase 5.5A).
+   * Set when the query is recognized as an rsID or ClinVar VCV accession.
+   * When set, all other entity slots (gene, organism, disease, protein) are null —
+   * variant recognition short-circuits the pipeline exactly like protein accessions.
+   *
+   * rsId: digits only (without "rs" prefix), e.g. "28934578" for rs28934578.
+   * clinvarVariationId: numeric Variation ID, e.g. "12375" (extracted from VCV or rsID lookup).
+   * clinvarAccession: VCV format, e.g. "VCV000012375" (present when query was a VCV accession).
+   */
+  variant: {
+    rsId: string | null;
+    clinvarVariationId: string | null;
+    clinvarAccession: string | null;
+  } | null;
+
   /** Derived from entity agreement — see computeConfidence() in lib/resolver/index.ts. */
   confidence: number;
 

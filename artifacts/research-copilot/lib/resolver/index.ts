@@ -42,7 +42,7 @@
  */
 
 import { normalizeSynonyms } from "@/lib/resolver/synonyms";
-import { classifyAccession } from "@/lib/resolver/accession";
+import { classifyAccession, classifyVariantIdentifier } from "@/lib/resolver/accession";
 import { resolveGene } from "@/lib/resolver/gene";
 import { resolveOrganism } from "@/lib/resolver/organism";
 import { resolveDisease } from "@/lib/resolver/disease";
@@ -80,6 +80,7 @@ function emptyNormalized(rawQuery: string): NormalizedQuery {
     organism: null,
     disease: null,
     protein: null,
+    variant: null,
     confidence: 0,
     candidates: null,
     ambiguous: false,
@@ -178,7 +179,44 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
     normalizeSynonyms(rawQuery);
   const q = normalized;
 
-  // ── Step 1: Accession (pure regex, no API call) ───────────────────────────
+  // ── Step 1a: Variant identifier (pure regex, no API call — Phase 5.5A) ────
+  // rsID (rs28934578) and ClinVar VCV accession (VCV000012375) short-circuit
+  // the pipeline exactly like protein accessions. All other entity slots are null.
+  const variantResult = classifyVariantIdentifier(q);
+  if (variantResult) {
+    logDebug({
+      rawQuery,
+      entitiesDetected: ["variant"],
+      organismChosen: null,
+      geneIdResolved: null,
+      confidence: 0.97,
+      reason: `Variant identifier matched (kind=${variantResult.kind}) — not a gene/organism/disease query.`,
+    });
+    return {
+      rawQuery,
+      gene: null,
+      organism: null,
+      disease: null,
+      protein: null,
+      variant: {
+        rsId: variantResult.rsId,
+        clinvarVariationId: variantResult.clinvarVariationId,
+        clinvarAccession: variantResult.clinvarAccession,
+      },
+      confidence: 0.97,
+      candidates: null,
+      ambiguous: false,
+      evidence: [
+        {
+          source: "synonym",
+          matchedValue: q,
+          reason: `Recognized as ClinVar variant identifier (${variantResult.kind}) by regex pattern — no API call required.`,
+        },
+      ],
+    };
+  }
+
+  // ── Step 1b: Accession (pure regex, no API call) ──────────────────────────
   // A distinct entity family — never merged with gene/organism/disease.
   const accessionResult = classifyAccession(q);
   if (accessionResult) {
@@ -196,6 +234,7 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
       organism: null,
       disease: null,
       protein: { accession: accessionResult.primaryIdentifier ?? q },
+      variant: null,
       confidence: accessionResult.confidence,
       candidates: null,
       ambiguous: false,
@@ -406,6 +445,7 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
     organism,
     disease,
     protein: null,
+    variant: null,
     confidence,
     candidates,
     ambiguous,

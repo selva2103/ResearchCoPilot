@@ -38,6 +38,7 @@ import type { ProteinRecord } from "@/types/protein-record";
 import type { NormalizedQuery } from "@/types/normalized-query";
 import type { ProteinResearchContext } from "@/types/research-context";
 import type { ModuleResult } from "@/types/module-result";
+import VariantExplorerSection from "@/components/VariantExplorerSection";
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -340,9 +341,9 @@ function GeneCard({
           <ResourceBadge
             label="Variants"
             available={gene.variants.available}
-            count={null}
-            future
-            title="Phase 5.5 — Variant Annotation"
+            count={gene.variants.count}
+            future={false}
+            title="Variant Explorer — see below"
           />
           <ResourceBadge
             label="Expression"
@@ -367,6 +368,9 @@ function GeneCard({
 
       {/* ── Transcript Explorer (Phase 5.3A) ─────────────────────────────── */}
       {isPrimary && <TranscriptExplorer gene={gene} normalizedQuery={normalizedQuery} />}
+      {isPrimary && gene.variants.available && (
+        <VariantExplorerSection gene={gene} />
+      )}
     </div>
   );
 }
