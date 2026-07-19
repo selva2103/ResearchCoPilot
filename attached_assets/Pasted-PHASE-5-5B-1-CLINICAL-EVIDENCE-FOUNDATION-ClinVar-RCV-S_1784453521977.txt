@@ -1,0 +1,461 @@
+PHASE 5.5B-1 — CLINICAL EVIDENCE FOUNDATION
+(ClinVar RCV/SCV Retrieval + ClinicalEvidence Model + Grouped Summary
+Display — NO VariantResearchContext, NO star rendering, NO full
+submission-detail UI yet)
+
+PROJECT CONTEXT — READ FIRST
+
+Pull the latest GitHub commit before starting.
+
+Completed phases (do NOT rebuild any of these):
+- PubMed Explorer, GEO Explorer, Universal Pagination
+- Sequence Foundation (5.1)
+- Biological Query Resolver (Phase R), including the case-sensitive
+  species symbol resolution patch
+- Gene Explorer (5.2)
+- Transcript Explorer (5.3A/B/C)
+- Protein Explorer Foundation (5.4A) + Protein Research Context (5.4B)
+  — tagged `v5.4-complete`
+- Phase 5.5A — Variant Foundation: `VariantRecord`,
+  `VariantTranscriptConsequence[]`, `NormalizedQuery.variant` slot,
+  ClinVar-primary bounded/paginated retrieval, standalone rsID/VCV
+  lookup, non-human guard. Fixed and confirmed working end-to-end
+  (HTTP 404 resolved, cache architecture resolved, performance gate
+  documented) as of the 5.5A fix session.
+
+This phase (5.5B-1) is the FIRST of a two-part split for Phase 5.5B,
+per the frozen 5.5B architecture's Section 12 recommendation. It builds
+ONLY: the mandatory deeper-ClinVar-retrieval audit, the
+`ClinicalEvidence` data model, retrieval/parsing/caching, and a basic
+grouped-summary display. It does NOT build: `VariantResearchContext`,
+review-status star rendering, the expandable full submission-detail
+table, or any UI polish beyond the grouped summary. Those belong to
+Phase 5.5B-2, a separate future session.
+
+Do NOT create a `v5.5-complete` tag in this session — that only happens
+after 5.5B-2 AND 5.5C are also complete.
+
+--------------------------------------------------
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint before making any change.
+2. Run TypeScript compilation after each step. Fix regressions
+   immediately — never proceed with a broken build.
+3. Never commit code that does not compile.
+
+**Architecture Freeze Rule:** The Phase 5.5B Architecture Design
+Specification is the architectural authority. You may adapt
+implementation details only where required by repository structure or
+verified ClinVar capabilities (Step 1's audit). You must NOT redesign
+data models, introduce new abstractions, merge this with 5.5B-2's scope,
+or expand scope without explicitly documenting and justifying the
+change.
+
+**Architecture Escalation Rule:** If implementing this design would
+require a change to the PUBLIC data model, phase boundaries, caching
+architecture, resolver architecture, or the GeneID-centered chain —
+STOP after documenting the issue in `PHASE-5.5B-1-AUDIT-FINDINGS.md`. Do
+NOT invent a new architecture. Report the finding and wait for review.
+
+**Immutability Rule:** `VariantRecord`, Phase R, Gene/Transcript/Protein
+Explorer, and Protein Research Context are frozen. This phase attaches
+`ClinicalEvidence` alongside `VariantRecord` (same `clinvarVariationId`
+key) without altering any of them, unless a genuine bug is proven.
+
+**Public Contract Stability:** Do not rename or reshape
+`NormalizedQuery`, `VariantRecord`, or any other existing exported type.
+
+**Documentation Freeze:** Create/update only
+`PHASE-5.5B-1-AUDIT-FINDINGS.md` and `PHASE-5.5B-1-FINAL-REPORT.md`
+(plus a partial-report if credits run low). Do not modify any prior
+phase's report.
+
+**Cache Reuse Rule (direct lesson from 5.5A's fix session):** Reuse the
+SAME cache abstraction that was resolved/confirmed working during
+5.5A's fix session for `variant:*` caching. Do NOT introduce a new
+in-memory or otherwise separate caching mechanism for clinical evidence.
+
+--------------------------------------------------
+
+NON-NEGOTIABLE ARCHITECTURAL CONSTRAINTS
+
+- `ClinicalEvidence` is RCV-centered, not a flat list: submissions
+  belong to a specific condition-interpretation (RCV), not to the
+  variant as an undifferentiated pool. A variant can be classified
+  differently for different conditions — the model must preserve that.
+- ClinVar's own aggregate classification and review status (per
+  condition) are preserved exactly as the source provides them — never
+  recomputed, never voted, never averaged.
+- Review status stars are NOT built in this phase (5.5B-2's job) — this
+  phase only needs to retrieve and store the raw review status text.
+- No `VariantResearchContext` in this phase.
+- No PubMed citation mining, no pathway/GO summarization, no population
+  frequency, no gnomAD — all remain out of scope per the frozen
+  architecture.
+- No LLM-generated text anywhere in this phase.
+- Never fetch full submission detail for every condition-interpretation
+  on initial variant load — lazy, on-demand only (Step 5).
+- No new rate limiter, no new generic NCBI client — reuse what already
+  exists.
+- Never fabricate a condition name, classification, review status, or
+  submitter — use `null`/empty array when the source doesn't provide it.
+
+--------------------------------------------------
+
+STEP 0 — BASELINE VERIFICATION
+
+```
+git status
+git log -1 --oneline
+```
+Confirm the repository is at the latest commit including 5.5A's fix
+session (HTTP 404 resolution, cache architecture resolution). Confirm
+`PHASE-5.5A-FINAL-REPORT.md` reflects a fully working, non-404 Variant
+Explorer. If it does not, STOP — 5.5B-1 depends on 5.5A actually
+working, not just being reported as working.
+
+--------------------------------------------------
+
+STEP 1 — MANDATORY CLINVAR DEEPER-RETRIEVAL AUDIT
+
+Do this before writing any implementation code. Write findings to
+`PHASE-5.5B-1-AUDIT-FINDINGS.md` as you go. This is exactly as
+consequential as 5.5A's own Step 1 audit — 5.5A already proved ESummary
+alone cannot provide submission-level data, so this phase's entire
+retrieval design depends on what you find here, not on assumption.
+
+Determine, with concrete evidence (real API calls, real responses):
+1. Does `efetch.fcgi?db=clinvar&rettype=vcv&id={VCV_ACCESSION}` (full
+   VCV XML) actually contain RCV-level condition interpretations and
+   SCV-level submission data? Test against a real, well-studied variant
+   (e.g. a known BRCA1 or TP53 pathogenic variant from 5.5A's own
+   smoke-test data).
+2. If VCV XML doesn't contain sufficient data, what NCBI surface does?
+   Test alternatives systematically — do not stop after checking only
+   one format. Explicitly check: XML (`rettype=vcv`), JSON (if a
+   `retmode=json` variant exists for this endpoint), a separate
+   RCV-level ESummary call, and whether NCBI currently exposes a
+   dedicated ClinVar REST API distinct from classic E-utilities (NCBI
+   has changed ClinVar's API surface over time — verify what's actually
+   live today, don't rely on training-data assumptions about what used
+   to exist).
+3. **Explicitly rule out ClinVar's bulk FTP flat files** (e.g.
+   `variant_summary.txt`, `submission_summary.txt`) as a live,
+   per-request retrieval mechanism — these are large periodic bulk
+   downloads designed for offline ETL/ingestion pipelines, not
+   per-variant on-demand API calls, and using them here would violate
+   this phase's on-demand/volume-safe design entirely. Note this
+   explicitly in the audit findings so a future session doesn't
+   reconsider them as a live-retrieval option. (They remain a
+   theoretical future option ONLY for a completely different
+   architecture — a scheduled bulk-ingestion job — which is out of
+   scope for this phase and not being proposed here.)
+4. Can `submissionCount` be obtained cheaply, separate from full
+   submission detail? This determines whether the grouped-summary view
+   (Section 4/5 of the architecture) can be shown without a full
+   submission fetch. **If no native cheap count field exists**, and the
+   only way to get a count is to fetch all SCVs anyway, this changes
+   the lazy-loading design — document this specifically (see Step 5's
+   explicit resolution rule for this exact scenario).
+5. Confirm real-world data quirks: multiple RCVs with overlapping/
+   near-duplicate condition names, malformed or partial XML sections,
+   variants with zero interpretations, variants with a very high
+   submission count on a single condition. Document how each will be
+   handled. **For overlapping/synonym condition names specifically**
+   (e.g. "Breast cancer," "Hereditary breast cancer," "Breast-ovarian
+   cancer syndrome" appearing as separate RCVs that may be conceptually
+   related): do NOT merge them — preserve ClinVar's raw wording exactly
+   as separate `ConditionInterpretation` entries. Capture whatever
+   database identifiers ClinVar already provides per condition (MedGen
+   CUI, OMIM, MONDO, etc.) in `ClinicalCondition.identifiers` — this
+   costs nothing extra (the data is already in the response) and keeps
+   the door open for future condition-relationship navigation without
+   requiring any merging logic now.
+6. Confirm ClinVar's actual review-status text values as they appear in
+   real responses (needed later for 5.5B-2's star mapping, but must be
+   captured now while you have real data in front of you).
+
+**Decision log requirement:** document every retrieval surface
+considered in a table, not just the one chosen:
+
+| Surface | Decision | Reason |
+|---|---|---|
+| ESummary | ✅/❌ | (e.g. "No SCV data") |
+| VCV XML | ✅/❌ | (e.g. "Contains RCV + SCV") |
+| RCV-level ESummary | ✅/❌ | ... |
+| JSON variant (if any) | ✅/❌ | ... |
+| Dedicated ClinVar REST API (if found) | ✅/❌ | ... |
+| Bulk FTP files | ❌ | Not suitable for per-request retrieval |
+
+This prevents a future session from re-litigating "why didn't we use
+JSON?" with no record of the answer.
+
+**Reference examples requirement:** save a small number of representative
+raw API responses (not full dumps — trimmed to the relevant sections) to
+`docs/clinvar/example-vcv.xml`, `docs/clinvar/example-rcv-section.xml`,
+`docs/clinvar/example-scv-section.xml` (or equivalent, matching whatever
+surface Step 1 actually confirms). These become golden reference
+material for future debugging and for 5.5B-2's implementation.
+
+Do not proceed to Step 2 until this is complete and documented.
+
+--------------------------------------------------
+
+STEP 2 — CLINICAL EVIDENCE DATA CONTRACTS
+
+Based on Step 1's findings, implement (adapt exact shape only if Step 1
+reveals a genuine structural need — do not redesign for convenience):
+
+```typescript
+interface ClinicalEvidence {
+  clinvarVariationId: string;          // links to VariantRecord
+  interpretations: readonly ConditionInterpretation[];
+}
+
+interface ConditionInterpretation {
+  rcvAccession: string;
+  conditions: readonly ClinicalCondition[];
+  aggregateClassification: string | null;   // ClinVar's own — preserved as-is
+  aggregateReviewStatus: string | null;      // ClinVar's own — preserved as-is
+  lastEvaluated: string | null;
+  submissionCount: number;  // use the native count field if the source
+                             // provides one (per Step 1 finding 4); if
+                             // no native field exists, compute it from
+                             // the actual number of SCVs returned in
+                             // the same response — never estimate or
+                             // guess this value
+  submissions: readonly ClinicalSubmission[]; // may be empty until lazy-loaded, see Step 5
+}
+
+interface ClinicalCondition {
+  name: string;
+  identifiers: readonly { database: string; id: string }[];
+}
+
+interface ClinicalSubmission {
+  scvAccession: string;
+  significance: string;
+  reviewStatus: string;
+  submitter: string | null;
+  lastEvaluated: string | null;
+  conditionAsserted: string | null;
+}
+```
+
+Keep this strictly separate from `VariantRecord` — do not merge fields
+into it. Run TypeScript.
+
+--------------------------------------------------
+
+STEP 3 — CLINICAL EVIDENCE RETRIEVAL SERVICE
+
+Implement retrieval using the surface confirmed in Step 1, through
+existing NCBI infrastructure (same rate limiter, same request patterns,
+same error conventions as 5.5A/5.4A). No new limiter, no new generic
+client.
+
+Cache using the SAME abstraction 5.5A's fix session resolved — new
+namespace only (e.g. `clinicalevidence:{clinvarVariationId}`), identity-
+scoped (this is single-entity data, not a paginated list, so it does not
+need the query-scoped list-key pattern from Section 13 of the 5.5
+architecture). Set a cache TTL longer than the existing protein caches,
+reflecting that clinical assertions change less frequently — pick a
+concrete value and justify it in the final report.
+
+Run TypeScript.
+
+--------------------------------------------------
+
+STEP 4 — PARSING AND NORMALIZATION
+
+Map the raw ClinVar response into Step 2's contracts. Group submissions
+under their correct `ConditionInterpretation` (RCV) — never flatten
+across conditions. Handle the real-world quirks documented in Step 1
+(duplicate/near-duplicate conditions, malformed sections, zero-
+interpretation variants) per what you found, not per guesswork. Never
+fabricate a classification, review status, condition name, or submitter
+— missing data becomes `null` or an empty array.
+
+Deterministic failure handling: if one `ConditionInterpretation` fails
+to parse, skip it individually while preserving all others successfully
+parsed for the same variant — do not abort the whole `ClinicalEvidence`
+object.
+
+Run TypeScript.
+
+--------------------------------------------------
+
+STEP 5 — LAZY LOADING AND SUBMISSION-LEVEL PAGINATION
+
+- On initial variant selection: fetch `ClinicalEvidence` with
+  `aggregateClassification`, `aggregateReviewStatus`, `submissionCount`
+  per condition-interpretation — but do NOT eagerly fetch full
+  `submissions[]` detail for every condition-interpretation if Step 1
+  found these can be split into separate calls. If Step 1 found they
+  cannot be split (bundled in one response), document this explicitly
+  and proceed with what's actually available — do not force an
+  artificial split that doesn't match the API's real shape.
+
+**Explicit rule for the count-vs-fetch-cost tension:** if Step 1 found
+that obtaining `submissionCount` requires fetching all SCVs anyway (no
+cheap native count field), then the "cost" of showing a count has
+already been paid — in that case, do not discard the fetched
+submissions just to simulate lazy loading. Store what was already
+retrieved and let "expand" simply reveal already-fetched data (a
+UI-only expand/collapse, not a new network trigger) rather than
+re-fetching. Only treat submission retrieval as a genuinely deferred,
+on-demand network call if Step 1 confirmed a cheap, separate count path
+actually exists. Document which of these two cases applies.
+
+- Full submission list per condition-interpretation is fetched only on
+  explicit user expansion of that specific condition (when a genuinely
+  separate on-demand fetch is possible per the rule above), reusing the
+  Universal Pagination Framework if `submissionCount` exceeds ~20 (exact
+  threshold: adjust based on what real data in Step 1 suggests is
+  reasonable, document the chosen value).
+- Never fetch submissions for every condition-interpretation on a
+  multi-condition variant's initial load, UNLESS Step 1 confirms this is
+  unavoidable per the rule above — in which case document it as an
+  accepted tradeoff, not an oversight.
+
+Run TypeScript.
+
+--------------------------------------------------
+
+STEP 6 — BASIC GROUPED-SUMMARY UI (minimal — full polish is 5.5B-2)
+
+Integrate into the existing Variant Explorer (5.5A) — when a specific
+variant is selected/expanded, show, per condition-interpretation:
+- Condition name(s).
+- Classification counts grouped by value (e.g. "3 Pathogenic, 1
+  Uncertain significance") — computed by simple counting for DISPLAY
+  grouping only, never as a synthesized "final" classification. The
+  authoritative `aggregateClassification`/`aggregateReviewStatus` from
+  ClinVar itself must also be shown, clearly labeled as ClinVar's own.
+- Raw review status text (no star rendering yet — plain text, e.g.
+  "criteria provided, multiple submitters, no conflicts").
+- An "expand submissions" affordance that triggers Step 5's lazy fetch —
+  the expanded view can be a simple list for now (table styling and
+  polish are 5.5B-2's job), but it must be functionally correct: show
+  submitter, classification, review status, evaluation date per
+  submission.
+
+Reuse existing card/loading/error component patterns — do not invent
+new UI primitives. Run TypeScript.
+
+--------------------------------------------------
+
+STEP 7 — ERROR, EMPTY, AND RATE-LIMIT STATES
+
+- No clinical evidence available for an otherwise-valid variant (e.g. a
+  VUS with no formal ClinVar interpretation) → explicit empty state, not
+  a silent gap or an error.
+- Non-human variant → inherited from 5.5A's guard, no new logic needed;
+  confirm this still holds (no accidental new code path that bypasses
+  it).
+- Rate-limit hit during clinical evidence retrieval → the existing
+  rate-limit message pattern, consistent with 5.5A/5.4A/5.4B.
+- Malformed/partial ClinVar response for a specific variant → handled
+  gracefully per Step 4, with a clear "clinical evidence partially
+  unavailable" state rather than a crash.
+
+Run TypeScript.
+
+--------------------------------------------------
+
+STEP 8 — REGRESSION VALIDATION
+
+- Full Phase R regression: TP53, Trp53, Tp53, BRCA, hepatitis, rs28934578
+  (or the equivalent rsID from 5.5A's smoke tests) — unchanged.
+- 5.5A's Variant Explorer (list, filters, pagination, standalone lookup)
+  — unaffected and still working (re-confirm the specific case that
+  previously 404'd, per the 5.5A fix session).
+- Gene Explorer, Transcript Explorer, Protein Explorer — unaffected.
+- TypeScript: zero errors. No Python changes. No AI-generated sections
+  modified.
+- Confirm no eager full-submission-fetch pattern exists anywhere in the
+  variant-selection flow (Step 5's lazy-loading requirement, re-verified
+  in practice).
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits run low before this phase is complete:
+1. Finish the current file/edit — never leave a syntactically broken
+   file.
+2. Ensure TypeScript passes on whatever is committed.
+3. Commit immediately.
+4. Write `PHASE-5.5B-1-PARTIAL-REPORT.md`: completed steps, remaining
+   steps, files modified, exact next step.
+
+--------------------------------------------------
+
+STEP 9 — FINAL DOCUMENTATION
+
+Write `PHASE-5.5B-1-FINAL-REPORT.md`:
+1. Step 1's full audit findings (the confirmed ClinVar retrieval surface
+   for RCV/SCV data), INCLUDING the decision-log table of every surface
+   considered and why it was accepted/rejected, and confirmation that
+   the trimmed reference example files were saved under `docs/clinvar/`
+   — this is the authoritative record 5.5B-2 will build from.
+2. Any architectural discrepancies found and the smallest adjustment
+   applied.
+3. Cache namespace and TTL chosen, with justification.
+4. Data contract field provenance (per Step 2/4).
+5. Lazy-loading/pagination thresholds chosen (Step 5), with
+   justification from real data observed in Step 1.
+6. Regression results (Step 8) with actual evidence.
+7. Known limitations.
+8. Explicit handoff scope for Phase 5.5B-2: exactly what
+   `VariantResearchContext` and the star-rendering/full-UI-polish work
+   will need to consume from `ClinicalEvidence`.
+
+--------------------------------------------------
+
+PHASE COMPLETION CRITERIA
+
+Phase 5.5B-1 is considered complete only when ALL of the following are
+true:
+- [ ] Step 1's ClinVar retrieval surface audit is complete and
+      documented with real evidence.
+- [ ] `ClinicalEvidence` correctly groups submissions under their
+      condition-interpretation (RCV), never flattened.
+- [ ] ClinVar's own aggregate classification/review status are
+      preserved as-is, never recomputed.
+- [ ] Submission-level detail is lazy-loaded only, never eagerly
+      fetched for every condition-interpretation.
+- [ ] The same cache abstraction from 5.5A's fix session is reused —
+      no new caching mechanism.
+- [ ] TypeScript compiles with zero errors.
+- [ ] 5.5A's Variant Explorer remains fully functional (the previously-
+      404'd case still works).
+- [ ] Existing explorers (Gene/Transcript/Protein) remain unchanged.
+- [ ] `PHASE-5.5B-1-FINAL-REPORT.md` is written.
+- [ ] No 5.5B-2 functionality exists in the codebase
+      (`VariantResearchContext`, star rendering, full submission-table
+      UI polish — none present).
+
+STOP. Do NOT implement Phase 5.5B-2 in this session. Do NOT build
+`VariantResearchContext`, review-status stars, or full UI polish. Do NOT
+create a `v5.5-complete` tag.
+Commit `PHASE-5.5B-1-FINAL-REPORT.md` together with all implementation
+changes only after TypeScript passes and Step 8's regression checks
+succeed.
+Do not commit broken code.
+
+--------------------------------------------------
+
+FORWARD-LOOKING NOTE (documentation only — do not act on this now)
+
+This phase's retrieval service is ClinVar-specific by design. A future
+platform direction may eventually support additional clinical evidence
+sources (ClinGen, CIViC, Open Targets, COSMIC, LOVD), at which point an
+abstraction like `ClinicalEvidenceProvider` → `ClinVarProvider` might
+make sense. Do NOT build this abstraction now — it would be premature
+generalization for a single-source phase. Simply avoid naming things in
+a way that makes a future provider-interface refactor unnecessarily
+painful (e.g. prefer `clinvar-retrieval.ts` over an unqualified
+`retrieval.ts` if it reduces ambiguity later). This note is for
+awareness only and creates no obligation in this session.
