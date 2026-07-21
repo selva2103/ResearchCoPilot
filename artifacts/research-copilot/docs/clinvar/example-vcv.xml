@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TRIMMED REFERENCE EXAMPLE — Phase 5.5B-1 ClinVar Audit
+     Source: ClinVar VCV EFetch
+     URL: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=clinvar&rettype=vcv&id=VCV004685939&retmode=xml
+     Variant: TP53 variant with 2 RCVs and 2 SCVs (confirmed 2026-07-21)
+     Confirmed facts:
+       - rettype=vcv requires VCV-prefixed accession (numeric-only returns empty <set/>)
+       - retmode=json silently returns XML (no JSON mode exists)
+       - Both RCV metadata (RCVList) and SCV data (ClinicalAssertionList) are bundled
+       - SubmissionCount is a native attribute on <Description @SubmissionCount>
+       - DateLastEvaluated is an attribute on <Description @DateLastEvaluated>
+       - ContributesToAggregateClassification is an attribute on <ClinicalAssertion>
+-->
+<VariationArchive VariationID="4685939" VariationName="NM_000546.6(TP53):c.838A&gt;T (p.Arg280Ter)" VariationType="single nucleotide variant" Accession="VCV004685939" Version="2" RecordType="classified" NumberOfSubmissions="2" NumberOfSubmitters="2" DateLastUpdated="2026-04-13" DateCreated="2026-01-24" MostRecentSubmission="2026-02-15">
+  <!-- Structure overview:
+       VariationArchive
+         ClassifiedRecord
+           RCVList                       ← per-condition interpretations (one per RCV)
+             RCVAccession (×N)
+               ClassifiedConditionList
+                 ClassifiedCondition     ← condition name + DB/ID identifiers
+               RCVClassifications
+                 GermlineClassification
+                   ReviewStatus
+                   Description @SubmissionCount @DateLastEvaluated
+           ClinicalAssertionList         ← individual submissions (SCVs)
+             ClinicalAssertion (×M)
+               ClinVarAccession @Type="SCV" @Accession @SubmitterName
+               Classification @DateLastEvaluated
+                 ReviewStatus
+                 GermlineClassification
+               TraitSet
+                 Trait
+                   XRef @DB @ID         ← used for SCV→RCV mapping via MedGen CUI
+  -->
+<RCVAccession Title="NM_000546.6(TP53):c.838A&gt;T (p.Arg280Ter) AND not provided" Accession="RCV006449648" Version="1">
+        <ClassifiedConditionList TraitSetID="9460">
+          <ClassifiedCondition DB="MedGen" ID="C3661900">not provided</ClassifiedCondition>
+        </ClassifiedConditionList>
+        <RCVClassifications>
+          <GermlineClassification>
+            <ReviewStatus>criteria provided, single submitter</ReviewStatus>
+            <Description DateLastEvaluated="2025-07-03" SubmissionCount="1">Likely pathogenic</Description>
+          </GermlineClassification>
+        </RCVClassifications>
+      </RCVAccession>
+  <!-- ... trimmed ... -->
+</VariationArchive>

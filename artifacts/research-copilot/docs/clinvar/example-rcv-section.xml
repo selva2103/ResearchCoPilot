@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TRIMMED REFERENCE EXAMPLE — Phase 5.5B-1 ClinVar Audit
+     One complete RCVAccession element from VCV004685939 (TP53 variant, 2026-07-21)
+     Shows: conditions, GermlineClassification, ReviewStatus, SubmissionCount, DateLastEvaluated
+-->
+<RCVAccession Title="NM_000546.6(TP53):c.838A&gt;T (p.Arg280Ter) AND not provided" Accession="RCV006449648" Version="1">
+        <ClassifiedConditionList TraitSetID="9460">
+          <ClassifiedCondition DB="MedGen" ID="C3661900">not provided</ClassifiedCondition>
+        </ClassifiedConditionList>
+        <RCVClassifications>
+          <GermlineClassification>
+            <ReviewStatus>criteria provided, single submitter</ReviewStatus>
+            <Description DateLastEvaluated="2025-07-03" SubmissionCount="1">Likely pathogenic</Description>
+          </GermlineClassification>
+        </RCVClassifications>
+      </RCVAccession>

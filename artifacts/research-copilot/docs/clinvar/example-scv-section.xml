@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TRIMMED REFERENCE EXAMPLE — Phase 5.5B-1 ClinVar Audit
+     One ClinicalAssertion (SCV) from VCV004685939 (TP53 variant, 2026-07-21)
+     Shows: ClinVarAccession @Type="SCV" @Accession @SubmitterName,
+            Classification @DateLastEvaluated, ReviewStatus, GermlineClassification,
+            TraitSet/Trait/XRef for SCV→RCV mapping via MedGen CUI
+-->
+<ClinicalAssertion ID="13991011" SubmissionDate="2026-01-09" ContributesToAggregateClassification="true" DateLastUpdated="2026-01-24" DateCreated="2026-01-24">
+        <ClinVarSubmissionID localKey="3883953|MedGen:C3661900" submittedAssembly="GRCh37"/>
+        <ClinVarAccession Accession="SCV007331602" DateUpdated="2026-01-24" DateCreated="2026-01-24" Type="SCV" Version="1" SubmitterName="ARUP Laboratories, Molecular Genetics and Genomics, ARUP Laboratories" OrgID="25969" OrganizationCategory="laboratory"/>
+        <RecordStatus>current</RecordStatus>
+        <Classification DateLastEvaluated="2025-07-03">
+          <ReviewStatus>criteria provided, single submitter</ReviewStatus>
+          <GermlineClassification>Likely Pathogenic</GermlineClassification>
+          <Comment Type="public">The TP53 c.838A&gt;T; p.Arg280Ter variant (rs753660142), to our knowledge, is not reported in the medical literature or gene specific databases. This variant is also absent from the Genome Aggregation Database (v2.1.1), indicating it is not a common polymorphism. This variant induces an early termination codon and is predicted to result in a truncated protein or mRNA subject to nonsense-mediated decay. Based on available information, this variant is considered to be likely pathogenic.</Comment>
+        </Classification>
+        <Assertion>variation to disease</Assertion>
+        <AttributeSet>
+          <Attribute Type="AssertionMethod">ARUP Molecular Germline Variant Investigation Process 2024</Attribute>
+          <Citation>
+            <URL>https://submit.ncbi.nlm.nih.gov/api/2.0/files/xwiqgyug/arup_molecular_germline_variant_investigation_process_arup-info-0022_2024.pdf/?format=attachment</URL>
+          </Citation>
+        </AttributeSet>
+        <ObservedInList>
+          <ObservedIn>
+            <Sample>
+              <Origin>germline</Origin>
+              <Species TaxonomyId="9606">human</Species>
+              <AffectedStatus>unknown</AffectedStatus>
+            </Sample>
+            <Method>
+              <MethodType>clinical testing</MethodType>
+            </Method>
+            <ObservedData>
+              <Attribute Type="Description">not provided</Attribute>
+            </ObservedData>
+          </ObservedIn>
+        </ObservedInList>
+        <SimpleAllele>
+          <GeneList>
+            <Gene Symbol="TP53"/>
+          </GeneList>
+          <VariantType>Variation</VariantType>
+          <AttributeSet>
+            <Attribute Type="HGVS">NC_000017.10:g.7577100T&gt;A</Attribute>
+          </AttributeSet>
+        </SimpleAllele>
+        <TraitSet Type="Disease">
+          <Trait Type="Disease">
+            <XRef DB="MedGen" ID="C3661900" Type="CUI"/>
+          </Trait>
+        </TraitSet>
+        <SubmissionNameList>
+          <SubmissionName>SUB15923449</SubmissionName>
+        </SubmissionNameList>
+      </ClinicalAssertion>
+  <!-- ... trimmed ... --></ClinicalAssertion>
