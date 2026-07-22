@@ -47,8 +47,9 @@ export function parseGeneRecord(
 ): GeneRecord {
   const geneId = entry.uid;
 
-  // ── Genomic coordinates and strand ─────────────────────────────────────────
+  // ── Genomic coordinates, accession, and strand ────────────────────────────
   const gi = entry.genomicinfo?.[0] ?? null;
+  let genomicAccession: string | null = gi?.chraccver ?? null;
   let genomicStart: number | null = null;
   let genomicEnd: number | null = null;
   let strand: GeneRecord["strand"] = null;
@@ -139,6 +140,7 @@ export function parseGeneRecord(
     taxonomyId: String(entry.organism.taxid),
     chromosome,
     cytogeneticLocation,
+    genomicAccession,
     genomicStart,
     genomicEnd,
     strand,

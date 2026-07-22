@@ -76,6 +76,17 @@ export interface GeneRecord {
   cytogeneticLocation: string | null;
 
   /**
+   * NCBI RefSeq chromosome accession version backing the genomic coordinates.
+   * Example: "NC_000017.11" for human chromosome 17 (GRCh38).
+   * Derived from ESummary genomicinfo[0].chraccver.
+   * null when genomicinfo is absent (same condition as genomicStart/genomicEnd/strand).
+   *
+   * Used by the Gene FASTA download endpoint (POST /api/gene/fasta) to construct the
+   * nuccore EFetch call with seq_start/seq_stop range parameters.
+   */
+  genomicAccession: string | null;
+
+  /**
    * Genomic start coordinate (0-based, GRCh38/current assembly).
    * Derived from ESummary genomicinfo[0].chrstart/chrstop — the LOWER value
    * regardless of strand, consistent with standard coordinate conventions.

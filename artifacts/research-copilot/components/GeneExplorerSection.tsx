@@ -176,6 +176,51 @@ function GeneCard({
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const SUMMARY_TRUNCATE = 280;
 
+  // ── Gene FASTA download state ───────────────────────────────────────────────
+  const [geneFastaState, setGeneFastaState] = useState<DownloadState>({ status: "idle" });
+
+  const runGeneFastaDownload = () => {
+    if (!gene.genomicAccession || gene.genomicStart === null || gene.genomicEnd === null || !gene.strand) return;
+    setGeneFastaState({ status: "loading" });
+    const strandNum = gene.strand === "-" ? 2 : 1;
+    enqueueDownload(async () => {
+      try {
+        const url =
+          `/api/gene/fasta?accession=${encodeURIComponent(gene.genomicAccession!)}` +
+          `&start=${gene.genomicStart}&stop=${gene.genomicEnd}` +
+          `&strand=${strandNum}&symbol=${encodeURIComponent(gene.officialSymbol)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          let message = `Download failed (HTTP ${res.status}).`;
+          const isRateLimited = res.status === 429;
+          try {
+            const body = await res.json() as { error?: string };
+            if (body.error) message = body.error;
+          } catch { /* ignore */ }
+          setGeneFastaState({ status: "error", message, rateLimited: isRateLimited });
+          return;
+        }
+        const blob = await res.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = `${gene.officialSymbol}_${gene.genomicAccession}.fasta`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(objUrl);
+        setGeneFastaState({ status: "idle" });
+      } catch (err) {
+        setGeneFastaState({
+          status: "error",
+          message: err instanceof Error ? err.message : "Network error — could not reach the download service.",
+        });
+      }
+    }).catch(() => {
+      setGeneFastaState({ status: "error", message: "Download failed unexpectedly. Please try again." });
+    });
+  };
+
   const summaryText = gene.summary;
   const summaryLong = summaryText && summaryText.length > SUMMARY_TRUNCATE;
   const summaryDisplay = summaryLong && !summaryExpanded
@@ -233,6 +278,13 @@ function GeneCard({
             label={`${gene.genomicStart.toLocaleString()}–${gene.genomicEnd.toLocaleString()} (${gene.strand})`}
             color="slate"
             mono
+          />
+        )}
+        {gene.genomicAccession && gene.genomicStart !== null && gene.genomicEnd !== null && gene.strand && (
+          <DownloadButton
+            label="Download Gene FASTA"
+            state={geneFastaState}
+            onClick={runGeneFastaDownload}
           />
         )}
         {gene.geneType ? (
