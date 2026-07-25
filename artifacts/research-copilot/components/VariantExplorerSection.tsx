@@ -30,6 +30,8 @@ import type {
   ConditionInterpretation,
   ClinicalSubmission,
 } from "@/types/clinical-evidence";
+import type { VariantResearchContext } from "@/types/variant-research-context";
+import { reviewStatusToStars } from "@/lib/clinical-evidence/review-status";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +67,21 @@ type CEState =
 interface CEApiResponse {
   status: "success" | "empty" | "error";
   data: ClinicalEvidence | null;
+  error: { code: string; message: string } | null;
+  cached: boolean;
+}
+
+// Research context fetch state per variant
+type RCState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "loaded"; data: VariantResearchContext }
+  | { phase: "error"; message: string };
+
+// API response shape from /api/variant/research-context
+interface RCApiResponse {
+  status: "success" | "empty" | "error";
+  data: VariantResearchContext | null;
   error: { code: string; message: string } | null;
   cached: boolean;
 }
@@ -108,6 +125,21 @@ async function fetchClinicalEvidence(
   });
   if (!res.ok) throw new Error(`Clinical evidence HTTP ${res.status}`);
   return res.json() as Promise<CEApiResponse>;
+}
+
+async function fetchResearchContext(
+  clinvarVariationId: string,
+  clinvarAccession: string | null,
+  taxonomyId: string,
+  variantRecord: VariantRecord
+): Promise<RCApiResponse> {
+  const res = await fetch("/api/variant/research-context", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clinvarVariationId, clinvarAccession, taxonomyId, variantRecord }),
+  });
+  if (!res.ok) throw new Error(`Research context HTTP ${res.status}`);
+  return res.json() as Promise<RCApiResponse>;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -184,43 +216,123 @@ function LoadingSpinner({ className }: { className?: string }) {
 
 // ── Clinical Evidence sub-components ──────────────────────────────────────────
 
-/** Renders one SCV submission as a compact row. */
-function SubmissionRow({ sub }: { sub: ClinicalSubmission }) {
+/**
+ * Presentation-only component for ClinVar review status stars.
+ *
+ * Always renders exactly 4 star positions (filled + empty), so researchers
+ * can gauge relative strength at a glance without counting.
+ * Raw status text is shown on hover — the star is a UX convenience; the text
+ * is the ground truth.
+ *
+ * Labeled "ClinVar review status" — never "confidence" (to avoid confusion with
+ * Phase R Resolver Confidence or Phase 5.4B Annotation Confidence).
+ *
+ * Fallback: unmapped status strings render as raw italic text, no stars (Step 7).
+ * All mapping logic lives in lib/clinical-evidence/review-status.ts, not here.
+ */
+function ReviewStatusStars({ aggregateReviewStatus }: { aggregateReviewStatus: string | null }) {
+  if (!aggregateReviewStatus) return null;
+
+  const starCount = reviewStatusToStars(aggregateReviewStatus);
+
+  // Unmapped review status → raw text fallback, no stars (Step 7 rule)
+  if (starCount === null) {
+    return (
+      <span
+        className="text-xs text-slate-400 dark:text-slate-500 italic"
+        title="ClinVar review status (tier not recognised)"
+      >
+        {aggregateReviewStatus}
+      </span>
+    );
+  }
+
+  // Always exactly 4 positions: filled amber stars + empty gray stars
   return (
-    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs py-1.5 border-b border-slate-100 dark:border-slate-700/40 last:border-0">
-      <span className="text-slate-400 dark:text-slate-500 font-mono">{sub.scvAccession}</span>
-      <div className="space-y-0.5">
-        {sub.submitter && (
-          <p className="text-slate-600 dark:text-slate-300 font-medium truncate">{sub.submitter}</p>
-        )}
-        <div className="flex items-center gap-2 flex-wrap">
-          {sub.significance && (
-            <span
-              className={`text-xs px-1.5 py-0 rounded-full font-medium ${classificationBadgeClass(sub.significance)}`}
-            >
-              {sub.significance}
-            </span>
-          )}
-          {sub.reviewStatus && (
-            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
-              {sub.reviewStatus}
-            </span>
-          )}
-          {sub.lastEvaluated && (
-            <span className="text-xs text-slate-400 dark:text-slate-500">
-              {sub.lastEvaluated}
-            </span>
-          )}
-          {!sub.contributesToAggregate && (
-            <span className="text-xs text-slate-300 dark:text-slate-600 italic">(not contributing)</span>
-          )}
-        </div>
-      </div>
-    </div>
+    <span
+      className="inline-flex items-center gap-0.5"
+      title={`ClinVar review status: "${aggregateReviewStatus}" (${starCount}/4 stars)`}
+      aria-label={`ClinVar review status: ${starCount} out of 4 stars — ${aggregateReviewStatus}`}
+    >
+      {Array.from({ length: 4 }, (_, i) =>
+        i < starCount ? (
+          <span key={i} className="text-amber-500 dark:text-amber-400 text-sm leading-none" aria-hidden="true">
+            ★
+          </span>
+        ) : (
+          <span key={i} className="text-slate-300 dark:text-slate-600 text-sm leading-none" aria-hidden="true">
+            ☆
+          </span>
+        )
+      )}
+    </span>
   );
 }
 
-/** Renders one ConditionInterpretation (one RCV) with its classification, review status, and submissions. */
+/**
+ * Stable sort for submission lists by lastEvaluated date (ISO string or null).
+ * null dates sort to the end. Equal/missing dates preserve original order (stable).
+ * Client-side only — no new fetch.
+ */
+function sortSubmissionsByDate(
+  submissions: readonly ClinicalSubmission[],
+  direction: "asc" | "desc"
+): ClinicalSubmission[] {
+  return [...submissions].sort((a, b) => {
+    const da = a.lastEvaluated ?? "";
+    const db = b.lastEvaluated ?? "";
+    if (da === db) return 0; // stable — preserves original order for ties
+    if (!da) return 1;       // null dates go last in both directions
+    if (!db) return -1;
+    const cmp = da < db ? -1 : 1;
+    return direction === "asc" ? cmp : -cmp;
+  });
+}
+
+/** Renders one SCV submission as a table row inside the sortable submission table. */
+function SubmissionRow({ sub }: { sub: ClinicalSubmission }) {
+  return (
+    <tr className="border-b border-slate-100 dark:border-slate-700/40 last:border-0 hover:bg-slate-50/80 dark:hover:bg-slate-700/20 transition-colors">
+      {/* SCV accession */}
+      <td className="py-1.5 pr-3 text-xs font-mono text-slate-400 dark:text-slate-500 whitespace-nowrap align-top">
+        {sub.scvAccession}
+        {!sub.contributesToAggregate && (
+          <span className="ml-1 text-slate-300 dark:text-slate-600 italic">(retired)</span>
+        )}
+      </td>
+      {/* Submitter */}
+      <td className="py-1.5 pr-3 text-xs text-slate-600 dark:text-slate-300 align-top max-w-[180px]">
+        <span className="block truncate" title={sub.submitter ?? undefined}>
+          {sub.submitter ?? <span className="text-slate-400 dark:text-slate-500 italic">—</span>}
+        </span>
+      </td>
+      {/* Classification */}
+      <td className="py-1.5 pr-3 align-top">
+        {sub.significance ? (
+          <span
+            className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${classificationBadgeClass(sub.significance)}`}
+          >
+            {sub.significance}
+          </span>
+        ) : (
+          <span className="text-xs text-slate-400 dark:text-slate-500 italic">—</span>
+        )}
+      </td>
+      {/* Review status with stars */}
+      <td className="py-1.5 pr-3 align-top">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <ReviewStatusStars aggregateReviewStatus={sub.reviewStatus} />
+        </div>
+      </td>
+      {/* Date */}
+      <td className="py-1.5 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap align-top">
+        {sub.lastEvaluated ?? <span className="italic">—</span>}
+      </td>
+    </tr>
+  );
+}
+
+/** Renders one ConditionInterpretation (one RCV) with its classification, review status, and sortable submissions. */
 function ConditionInterpretationBlock({
   interp,
   submissionsExpanded,
@@ -230,8 +342,17 @@ function ConditionInterpretationBlock({
   submissionsExpanded: boolean;
   onToggleSubmissions: () => void;
 }) {
+  // Stable sort state for the submission table — client-side only, no new fetch
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   const classGroups = groupSubmissionClassifications(interp.submissions);
   const conditionNames = interp.conditions.map((c) => c.name).join("; ");
+
+  const sortedSubmissions = submissionsExpanded
+    ? sortSubmissionsByDate(interp.submissions, sortDir)
+    : [];
+
+  const toggleSort = () => setSortDir((d) => (d === "asc" ? "desc" : "asc"));
 
   return (
     <div className="rounded-lg border border-slate-100 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/20 p-3 space-y-2">
@@ -271,11 +392,15 @@ function ConditionInterpretationBlock({
         )}
       </div>
 
-      {/* Review status — plain text, no stars (5.5B-2 adds stars) */}
+      {/* ClinVar review status with stars — labeled as ClinVar review status, never "confidence" */}
       {interp.aggregateReviewStatus && (
-        <p className="text-xs text-slate-500 dark:text-slate-400 italic">
-          Review status: {interp.aggregateReviewStatus}
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-400 dark:text-slate-500">ClinVar review status:</span>
+          <ReviewStatusStars aggregateReviewStatus={interp.aggregateReviewStatus} />
+          <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+            {interp.aggregateReviewStatus}
+          </span>
+        </div>
       )}
 
       {/* Submission classification counts — display grouping only, not a synthesized verdict */}
@@ -307,11 +432,36 @@ function ConditionInterpretationBlock({
               : `Show ${interp.submissions.length} submission${interp.submissions.length !== 1 ? "s" : ""} (${interp.submissionCount} in ClinVar)`}
           </button>
 
+          {/* Sortable table — client-side stable sort on already-fetched data, no new fetch */}
           {submissionsExpanded && (
-            <div className="mt-2 space-y-0 rounded border border-slate-100 dark:border-slate-700/40 bg-white dark:bg-slate-800/30 px-2 py-1">
-              {interp.submissions.map((sub) => (
-                <SubmissionRow key={sub.scvAccession} sub={sub} />
-              ))}
+            <div className="mt-2 rounded border border-slate-100 dark:border-slate-700/40 bg-white dark:bg-slate-800/30 overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-700/40 bg-slate-50/80 dark:bg-slate-800/50">
+                    <th className="py-1.5 pr-3 text-left font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap pl-2">SCV</th>
+                    <th className="py-1.5 pr-3 text-left font-medium text-slate-500 dark:text-slate-400">Submitter</th>
+                    <th className="py-1.5 pr-3 text-left font-medium text-slate-500 dark:text-slate-400">Classification</th>
+                    <th className="py-1.5 pr-3 text-left font-medium text-slate-500 dark:text-slate-400">Review Status</th>
+                    <th className="py-1.5 text-left font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap pr-2">
+                      <button
+                        type="button"
+                        onClick={toggleSort}
+                        className="flex items-center gap-0.5 hover:text-violet-600 dark:hover:text-violet-400 transition-colors"
+                        title={`Sort by date ${sortDir === "asc" ? "descending" : "ascending"}`}
+                        aria-label={`Sort by evaluation date ${sortDir === "asc" ? "descending" : "ascending"}`}
+                      >
+                        Date
+                        <span aria-hidden="true">{sortDir === "asc" ? " ↑" : " ↓"}</span>
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedSubmissions.map((sub) => (
+                    <SubmissionRow key={sub.scvAccession} sub={sub} />
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -418,6 +568,130 @@ function ClinicalEvidencePanel({
   );
 }
 
+// ── Variant Research Context panel ────────────────────────────────────────────
+
+/**
+ * Lazy-loaded Research Context section for a variant.
+ * Follows the same expand-on-first-click pattern as ClinicalEvidencePanel.
+ * Shows: clinical summary (if present), conflict summary (if present), relationships.
+ * Omits fields cleanly when null — no "coming soon" placeholders.
+ */
+function VariantResearchContextPanel({ rcState }: { rcState: RCState }) {
+  const baseClass =
+    "mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/40 space-y-2";
+
+  if (rcState.phase === "loading") {
+    return (
+      <div className={`${baseClass} flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500`}>
+        <LoadingSpinner />
+        Loading research context…
+      </div>
+    );
+  }
+
+  if (rcState.phase === "error") {
+    return (
+      <div className={`${baseClass}`}>
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          ⚠️ Research context unavailable: {rcState.message}
+        </p>
+      </div>
+    );
+  }
+
+  if (rcState.phase !== "loaded") return null;
+
+  const { data } = rcState;
+
+  // Check whether there's anything meaningful to show
+  const hasSummary = data.clinicalSummary !== null;
+  const hasConflict = data.conflictSummary !== null;
+  const hasTranscript = data.transcriptContext.length > 0;
+
+  return (
+    <div className={`${baseClass}`}>
+      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+        Research Context
+      </p>
+
+      {/* Clinical summary — derived from condition names + ClinVar aggregate classifications */}
+      {hasSummary && (
+        <div className="rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-700/40 px-3 py-2 space-y-1">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Clinical Summary</p>
+          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+            {data.clinicalSummary!.text}
+          </p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+            Source: {data.clinicalSummary!.source}
+          </p>
+        </div>
+      )}
+
+      {/* Conflict/distribution summary — distribution of submission classifications, no winner declared */}
+      {hasConflict && (
+        <div className="rounded bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-700/40 px-3 py-2 space-y-1">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Submission Distribution</p>
+          <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+            {data.conflictSummary!.text}
+          </p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+            Source: {data.conflictSummary!.source}
+          </p>
+        </div>
+      )}
+
+      {/* Transcript/protein relationship chain — reused from VariantRecord */}
+      {hasTranscript && (
+        <div className="space-y-0.5">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Transcript Context</p>
+          {data.transcriptContext.map((tc) => (
+            <div key={tc.transcriptAccession} className="pl-2 flex items-center gap-1.5 flex-wrap text-xs">
+              <span className="text-slate-400 dark:text-slate-500 font-mono">{tc.transcriptAccession}</span>
+              {tc.hgvsCoding && (
+                <span className="font-mono text-slate-600 dark:text-slate-300">{tc.hgvsCoding}</span>
+              )}
+              {tc.hgvsProtein && (
+                <>
+                  <span className="text-slate-300 dark:text-slate-600">→</span>
+                  <span className="font-mono text-slate-600 dark:text-slate-300">{tc.hgvsProtein}</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Biological entity relationship chain */}
+      <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-400 dark:text-slate-500">
+        <span className="font-mono text-slate-600 dark:text-slate-300">{data.relationships.geneSymbol}</span>
+        <span aria-hidden="true">·</span>
+        <span>Gene {data.relationships.geneId}</span>
+        {data.relationships.transcriptAccession && (
+          <>
+            <span aria-hidden="true">→</span>
+            <span className="font-mono text-slate-600 dark:text-slate-300">{data.relationships.transcriptAccession}</span>
+          </>
+        )}
+        {data.relationships.proteinAccession && (
+          <>
+            <span aria-hidden="true">→</span>
+            <span className="font-mono text-slate-600 dark:text-slate-300">{data.relationships.proteinAccession}</span>
+          </>
+        )}
+        <span aria-hidden="true">·</span>
+        <span className="italic">{data.relationships.organism}</span>
+      </div>
+
+      {/* Show a neutral message when no content fields could be derived */}
+      {!hasSummary && !hasConflict && !hasTranscript && (
+        <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+          No structured clinical summary available for this variant.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Variant row ────────────────────────────────────────────────────────────────
 
 function VariantRow({
@@ -427,6 +701,9 @@ function VariantRow({
   ceState,
   expandedRcvs,
   onToggleRcv,
+  rcState,
+  isRcExpanded,
+  onRcToggle,
 }: {
   variant: VariantRecord;
   isExpanded: boolean;
@@ -434,11 +711,16 @@ function VariantRow({
   ceState: CEState | undefined;
   expandedRcvs: Set<string>;
   onToggleRcv: (rcvAccession: string) => void;
+  rcState: RCState | undefined;
+  isRcExpanded: boolean;
+  onRcToggle: () => void;
 }) {
   const consequence = variant.transcriptConsequences[0] ?? null;
   const hasConsequence = consequence !== null;
   const currentCeState = ceState ?? { phase: "idle" as const };
+  const currentRcState = rcState ?? { phase: "idle" as const };
   const isCeLoading = currentCeState.phase === "loading";
+  const isRcLoading = currentRcState.phase === "loading";
 
   return (
     <div
@@ -555,6 +837,37 @@ function VariantRow({
             </>
           )}
         </button>
+
+        {/* Research context expand toggle */}
+        <button
+          type="button"
+          onClick={onRcToggle}
+          disabled={isRcLoading}
+          className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors disabled:opacity-60 disabled:cursor-wait"
+          aria-expanded={isRcExpanded}
+          aria-label="Toggle research context"
+        >
+          {isRcLoading ? (
+            <>
+              <LoadingSpinner />
+              Loading…
+            </>
+          ) : (
+            <>
+              Research Context
+              <svg
+                className={`h-3 w-3 transition-transform ${isRcExpanded ? "rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+                aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Clinical evidence panel — shown when expanded */}
@@ -564,6 +877,11 @@ function VariantRow({
           expandedRcvs={expandedRcvs}
           onToggleRcv={onToggleRcv}
         />
+      )}
+
+      {/* Research context panel — shown when RC is expanded, same lazy pattern */}
+      {isRcExpanded && currentRcState.phase !== "idle" && (
+        <VariantResearchContextPanel rcState={currentRcState} />
       )}
     </div>
   );
@@ -650,6 +968,10 @@ export default function VariantExplorerSection({ gene }: { gene: GeneRecord }) {
   // Per-condition submission panels open within the currently-expanded variant
   const [expandedRcvs, setExpandedRcvs] = useState<Set<string>>(new Set());
 
+  // Research context state (5.5B-2) — separate expand state from CE, same lazy-load pattern
+  const [expandedRcVariantId, setExpandedRcVariantId] = useState<string | null>(null);
+  const [rcMap, setRcMap] = useState<Map<string, RCState>>(new Map());
+
   // Load page 1 (or refresh on filter change)
   const loadPage1 = useCallback(
     async (sig: SigFilter, type: TypeFilter) => {
@@ -660,9 +982,10 @@ export default function VariantExplorerSection({ gene }: { gene: GeneRecord }) {
       setHasMore(false);
       setNextOffset(0);
       setHitUpstreamLimit(false);
-      // Collapse any open CE panel on filter change
+      // Collapse any open CE and RC panels on filter change
       setExpandedVariantId(null);
       setExpandedRcvs(new Set());
+      setExpandedRcVariantId(null);
 
       try {
         const result = await fetchVariants(
@@ -789,6 +1112,57 @@ export default function VariantExplorerSection({ gene }: { gene: GeneRecord }) {
     });
   }, []);
 
+  // Toggle research context for a variant (5.5B-2)
+  const handleRcToggle = useCallback(
+    async (variant: VariantRecord) => {
+      const vid = variant.clinvarVariationId;
+
+      // Collapse if already expanded
+      if (expandedRcVariantId === vid) {
+        setExpandedRcVariantId(null);
+        return;
+      }
+
+      // Expand
+      setExpandedRcVariantId(vid);
+
+      // Skip fetch if already loaded (any terminal state)
+      const current = rcMap.get(vid);
+      if (current && current.phase !== "idle") return;
+
+      // Mark loading
+      setRcMap((prev) => new Map(prev).set(vid, { phase: "loading" }));
+
+      try {
+        const response = await fetchResearchContext(
+          vid,
+          variant.clinvarAccession ?? null,
+          gene.taxonomyId,
+          variant
+        );
+
+        if (response.status === "success" && response.data) {
+          setRcMap((prev) => new Map(prev).set(vid, { phase: "loaded", data: response.data! }));
+        } else {
+          setRcMap((prev) =>
+            new Map(prev).set(vid, {
+              phase: "error",
+              message: response.error?.message ?? "Failed to load research context.",
+            })
+          );
+        }
+      } catch (err) {
+        setRcMap((prev) =>
+          new Map(prev).set(vid, {
+            phase: "error",
+            message: err instanceof Error ? err.message : "Failed to load research context.",
+          })
+        );
+      }
+    },
+    [expandedRcVariantId, rcMap, gene.taxonomyId]
+  );
+
   // Initial load on mount
   useEffect(() => {
     loadPage1(sigFilter, typeFilter);
@@ -888,6 +1262,9 @@ export default function VariantExplorerSection({ gene }: { gene: GeneRecord }) {
               ceState={ceMap.get(v.clinvarVariationId)}
               expandedRcvs={expandedVariantId === v.clinvarVariationId ? expandedRcvs : new Set()}
               onToggleRcv={handleToggleRcv}
+              rcState={rcMap.get(v.clinvarVariationId)}
+              isRcExpanded={expandedRcVariantId === v.clinvarVariationId}
+              onRcToggle={() => handleRcToggle(v)}
             />
           ))}
         </div>
