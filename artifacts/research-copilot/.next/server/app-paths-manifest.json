@@ -1,7 +1,4 @@
 {
-  "/api/variant/list/route": "app/api/variant/list/route.js",
-  "/api/clinical-evidence/route": "app/api/clinical-evidence/route.js",
-  "/api/variant/research-context/route": "app/api/variant/research-context/route.js",
-  "/results/page": "app/results/page.js",
-  "/page": "app/page.js"
+  "/page": "app/page.js",
+  "/results/page": "app/results/page.js"
 }
