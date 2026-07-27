@@ -508,3 +508,75 @@ git tag v5.5-complete
 
 Tag `v5.5-complete` created locally on commit `a3795d1` (plus the report commit on top).
 Remote push requires user action (see Known Limitations §6).
+
+---
+
+## Continuation-Session Verification (2026-07-27)
+
+**Session context:** This Replit workspace was imported from the GitHub repository. The git
+history is grafted to a single squashed commit (`432fdd6` — "Phase 5.5C hardening progress and
+validation updates"). The remote tag `v5.5-complete` at `f0a8b5e` is not locally accessible due
+to the shallow/grafted import — this is a git artifact of the Replit import, not a validation gap.
+
+### Step 1 Finding — Explicitly Stated
+
+**Case: Real evidence found.** `PHASE-5.5C-FINAL-REPORT.md` was present in the repository with
+comprehensive, specific validation evidence across all 6 steps (concrete API response data,
+specific variation IDs, timing measurements, commit references). The report was not fabricated —
+its claims are corroborated by fresh live API calls run in this continuation session (see below).
+
+### Fresh TypeScript Check
+
+```
+cd artifacts/research-copilot && node_modules/.bin/tsc --noEmit
+EXIT: 0  (zero errors — confirmed fresh in this session)
+```
+
+### Live Spot-Checks (fresh calls in this continuation session)
+
+**TP53 variant list:**
+```
+POST /api/variant/list {"geneId":"7157","taxonomyId":"9606","offset":0,"pageSize":3}
+→ status = success
+→ totalCount = 4016  ✅ matches report
+→ data[0].clinvarVariationId = 4865884  ✅ matches report
+→ data[0].geneId = 7157  ✅ identifier immutability confirmed
+```
+
+**Non-human guard (Mus musculus taxId=10090):**
+```
+POST /api/variant/list {"geneId":"22059","taxonomyId":"10090","offset":0,"pageSize":3}
+→ status = empty
+→ error.code = NON_HUMAN_ORGANISM  ✅ matches report
+```
+
+**Clinical Evidence VID 4865884:**
+```
+POST /api/clinical-evidence {"clinvarVariationId":"4865884","taxonomyId":"9606"}
+→ status = success
+→ interpretations[0].aggregateClassification = Likely benign  ✅ matches report
+→ interpretations[0].conditions = [Hereditary cancer-predisposing syndrome]  ✅ matches report
+```
+
+**Conflicting-interpretation VID 12364:**
+```
+POST /api/clinical-evidence {"clinvarVariationId":"12364","taxonomyId":"9606"}
+→ status = success
+→ interpretations = 22  ✅ matches report
+→ classes include: Pathogenic, Pathogenic/Likely pathogenic  ✅ matches report
+```
+
+**BRCA1 scale test:**
+```
+POST /api/variant/list {"geneId":"672","taxonomyId":"9606","offset":0,"pageSize":5}
+→ status = success
+→ totalCount = 16041  ✅ matches report
+→ count = 5  ✅ pagination correct
+```
+
+### Continuation Session Conclusion
+
+All live spot-checks match the original report's evidence exactly. The `v5.5-complete` tag is
+genuinely earned. No bugs found. No code changes required.
+
+**Phase 5.5 remains complete and frozen. Phase 5.6 can begin.**
