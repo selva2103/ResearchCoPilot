@@ -1,3 +1,4 @@
 {
-  "/page": "app/page.js"
+  "/api/variant/list/route": "app/api/variant/list/route.js",
+  "/api/clinical-evidence/route": "app/api/clinical-evidence/route.js"
 }

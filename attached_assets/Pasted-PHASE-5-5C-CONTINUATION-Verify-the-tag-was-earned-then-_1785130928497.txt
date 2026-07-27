@@ -1,0 +1,132 @@
+PHASE 5.5C — CONTINUATION (Verify the tag was earned, then finish
+documentation)
+
+PROJECT CONTEXT — READ FIRST
+Project Philosophy
+
+ResearchCoPilot is a production-grade Life Science Research Assistant, not a database browser. Follow the established architecture already present in the repository. Do not redesign completed modules or introduce new architecture. This continuation is strictly for completing Phase 5.5C documentation and verifying that the existing v5.5-complete release is supported by real validation evidence.
+   
+
+
+This is a continuation on a fresh account. A prior session pushed `main`
+(now at commit `432fdd6` or later) and created + pushed the
+`v5.5-complete` tag — but `PHASE-5.5C-FINAL-REPORT.md` was never
+written. This is out of the prescribed order: the original Phase 5.5C
+prompt required the final report (documenting real evidence from Steps
+1–6) BEFORE the tag was created. Do not assume the tag means validation
+was actually completed — verify this explicitly before finishing.
+
+
+
+Do not assume previous chat history exists. Treat the repository and project documents as the source of truth.
+
+--------------------------------------------------
+
+STEP 0 — BASELINE VERIFICATION
+
+Read before making any code or documentation changes (only if the files exist):
+
+- PHASE-5.5C-PARTIAL-REPORT.md
+- CURRENT-STATE-NOTES-CONTINUATION.md
+- CURRENT-STATE-NOTES-5.4C-CONTINUATION.md
+- Any Phase 5.5 reports (5.5A, 5.5B-1, 5.5B-2)
+
+If any of these files are missing, continue using the repository, Git history, commit history, and existing codebase as the authoritative source of truth rather than treating the missing files as an error. 
+
+```
+git status
+git branch
+git log -1 --oneline
+git tag -l "v5.5-complete"
+git ls-remote --tags origin v5.5-complete
+```
+Confirm you're on `main`, at the expected commit, and the tag exists
+both locally and on the remote. Run TypeScript to establish a true
+baseline.
+
+--------------------------------------------------
+
+STEP 1 — VERIFY WHETHER VALIDATION ACTUALLY HAPPENED (do this before
+writing anything)
+
+Search for any evidence that Steps 1–6 of the original Phase 5.5C prompt
+were actually executed: `PHASE-5.5C-PARTIAL-REPORT.md`, any console/log
+output committed alongside the work, commit messages referencing
+specific validation results, or code changes that look like bug fixes
+made during hardening (as opposed to the tag being created immediately
+after Step 0's branch consolidation with nothing in between).
+
+**If real evidence is found** that end-to-end validation, cross-species
+checks, downloads, error-states, performance/cache verification, and
+regression were actually run: proceed to Step 2 using that evidence —
+do not re-run what's already genuinely verified.
+
+**If no evidence is found** that Steps 1–6 were actually executed (i.e.
+the tag appears to have been created immediately after the branch merge
+with no validation work in between): treat this as unverified. The tag
+was created prematurely. You must actually perform Steps 1–6 from the
+original Phase 5.5C prompt now, with real evidence collected, before
+writing the final report — do not write a report that retroactively
+claims success without having actually run the checks.
+
+Document which of these two cases applies, explicitly, in your first
+response before doing anything else.
+
+--------------------------------------------------
+
+STEP 2 — COMPLETE (OR RE-RUN) VALIDATION AS NEEDED
+
+Per Step 1's finding, either compile the existing verified evidence or execute only the missing or unverified portions of the original Phase 5.5C prompt's Steps 1–6. Do not repeat validations that are already supported by trustworthy evidence discovered during Step 1.
+1. End-to-end validation (TP53, BRCA1/2, a conflicting-interpretation
+   variant, a sparse ClinicalEvidence record) — including the Identifier
+   Immutability Rule check across the full chain.
+2. Cross-species validation (TP53/Trp53/Tp53, non-human clinical-data
+   messaging).
+3. Download validation (Transcript/Protein/Gene FASTA, rate limiter
+   under rapid Variant Explorer use).
+4. Error-state testing (all 6 scenarios from the original prompt).
+5. Performance verification (BRCA1/2 request-count re-check, Clinical
+   Evidence bounded retrieval, VariantResearchContext zero-new-calls,
+   and cache-reuse on repeated expand/collapse).
+6. Targeted regression (Phase R full set, Gene/Transcript/Protein
+   Explorers, PubMed/GEO counts, TypeScript clean).
+
+If any genuine bug is found during this process: fix it with the
+smallest targeted change, re-verify, and note explicitly in the final
+report that the `v5.5-complete` tag was created before this fix — flag
+this discrepancy clearly rather than silently moving the tag. Do not
+delete, move, or force-push over the existing tag without explicit
+confirmation from the user first.
+
+--------------------------------------------------
+
+CREDIT SAFETY RULE
+
+If credits run low: finish the current file, run TypeScript, commit and
+push immediately (verify via `git ls-remote origin main`), write
+`PHASE-5.5C-PARTIAL-REPORT.md` with completed/remaining steps and the
+Step 1 finding (evidence found vs. not found) preserved so a future
+session doesn't have to redo this determination.
+
+--------------------------------------------------
+
+STEP 3 — FINAL DOCUMENTATION
+
+Write `PHASE-5.5C-FINAL-REPORT.md`:
+1. Step 1's finding — explicitly state whether validation evidence was
+   found pre-existing or had to be freshly run, and why.
+2. All original Step 7 requirements: branch consolidation confirmation,
+   end-to-end/cross-species/download/error-state/performance/regression
+   results with actual evidence, known limitations, Files Added/Modified/
+   Public APIs Changed/Breaking Changes, Release Summary.
+3. Explicit final statement: whether `v5.5-complete` is now genuinely
+   justified by real validation evidence (documented here), or whether
+   any gap was found that the user should be aware of even though the
+   tag already exists on the remote.
+
+--------------------------------------------------
+
+STOP. Do NOT implement Phase 5.6 in this session. Do NOT move or
+recreate the `v5.5-complete` tag without explicit confirmation from the
+user if a genuine issue is found.
+Do not commit broken code.
