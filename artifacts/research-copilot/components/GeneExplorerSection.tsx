@@ -39,6 +39,7 @@ import type { NormalizedQuery } from "@/types/normalized-query";
 import type { ProteinResearchContext } from "@/types/research-context";
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
+import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -423,6 +424,7 @@ function GeneCard({
       {isPrimary && gene.variants.available && (
         <VariantExplorerSection gene={gene} />
       )}
+      {isPrimary && <BiologicalFunctionPanel gene={gene} />}
     </div>
   );
 }

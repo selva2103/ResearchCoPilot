@@ -1,14 +1,9 @@
 {
   "pages": {
-    "/api/variant/list/route": [
+    "/api/gene/go/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/variant/list/route.js"
-    ],
-    "/api/clinical-evidence/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/clinical-evidence/route.js"
+      "static/chunks/app/api/gene/go/route.js"
     ]
   }
 }

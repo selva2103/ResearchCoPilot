@@ -1,0 +1,264 @@
+# ResearchCoPilot — Phase 5.6A Implementation Prompt
+ 
+## Biological Function Explorer — GO Foundation
+  
+## 1. Project Context
+ 
+This is a continuation of the ResearchCoPilot project. All previously completed phases (through 5.5) are **frozen** — their architecture has already been reviewed and approved, and nothing in this prompt authorizes touching them.
+ 
+You are implementing **only** the approved architecture described in the Phase 5.6 Architecture Design Specification (Biological Function Explorer). This is not a redesign exercise. Do not introduce new architectural patterns, do not restructure existing modules, and do not "improve" prior phases as a side effect of this work.
+ 
+Reuse existing architecture wherever possible. Specifically, you must reuse:
+ 
+ 
+- The existing Gene EFetch full-XML retrieval already built for Gene Explorer (Phase 5.2), including its caching and request handling.
+ 
+- The identifier resolution flow already established (Gene/Transcript/Protein context), which this phase consumes and never re-derives.
+ 
+- The Universal Pagination Framework, if invoked by volume thresholds (Section 7 below).
+ 
+- Existing API helpers, loading states, and error-handling patterns from Phase 5.5.
+ 
+
+ 
+What is already complete and must remain untouched: Gene Explorer (5.2), Transcript/Protein phases, and all of Phase 5.5 (Variant Explorer, ClinVar surfacing). Nothing in this prompt should require edits to those modules beyond consuming their outputs.
+  
+## 2. Phase Goal
+ 
+Researchers frequently need to answer a more fundamental question than "what does this variant mean" or "what protein does this transcript encode": **what does this gene/protein actually do inside the cell?**
+ 
+This phase exists to answer that question directly, using the biological community's own standard vocabulary (Gene Ontology) rather than inventing a new one. It is deliberately sequenced ahead of Domains (5.7) and Structures (5.8) because researchers conceptually ask "what does it do" before "what does it look like" — function before form. Without this phase, a researcher has identifier and variant context but no answer to the most basic biological question about the gene they're looking at.
+  
+## 3. Mandatory Pre-Implementation Audit
+ 
+**Do not write any retrieval, parsing, or UI code until this audit is complete and documented.**
+ 
+This is the single most consequential step in this phase, mirroring the pattern that already paid off in Gene FASTA (the `chraccver` discovery) and in 5.5B-1 (the ClinVar surface audit).
+ 
+### Audit Question
+ 
+Does the Gene EFetch full-XML response — already being fetched by Gene Explorer (5.2) for MANE Select extraction — already contain GO term annotations, **and** is that coverage sufficiently complete for this phase's purpose?
+ 
+These are two separate questions. Do not conflate "present" with "adequate."
+ 
+### Required Steps
+ 
+ 
+1. Inspect the existing Gene EFetch XML response structure already in the codebase. Identify whether GO term annotations (process, function, component) appear in it at all.
+ 
+2. Inspect existing parsers to confirm whether any code already extracts or discards these fields.
+ 
+3. Inspect existing cached data to see whether representative genes already have this XML cached.
+ 
+4. For **at least** these four genes — TP53, BRCA1, CFTR, and Trp53 (non-human) — compare the GO term count and coverage found in the Gene XML against a reference GO source (QuickGO). Record the actual counts side by side. Do not estimate; fetch and compare.
+ 
+5. Based on that comparison, reach one of two conclusions, and document which one and why: 
+ 
+  - **CONFIRMED sufficient**: Gene XML contains GO annotations and coverage is comparably complete to the reference source. In this case, this phase requires **zero new external API calls** — only a parser addition to extract data already being fetched, exactly like the Gene FASTA `genomicAccession` discovery.
+ 
+  - **NOT confirmed** (absent, or present but demonstrably thinner than the reference source): document this finding, along with the four-gene evidence, and **STOP**. Do not automatically implement `gene2go` or QuickGO in the same session. Introducing either is a genuinely new external dependency — it changes dependency footprint, caching, rate limiting, deployment, and testing surface, exactly as UniProt and gnomAD did in prior phases. That deserves its own architectural review and sign-off before any retrieval code is written, the same way ClinVar and Gene FASTA were handled. Report the audit findings and wait for explicit confirmation before proceeding with a fallback source.
+ 
+
+ 
+ 
+
+ 
+Do not proceed to Section 4 until this audit's conclusion and its evidence (the four-gene comparison) are written down in the PR/commit description. If the audit failed and a fallback source has not yet been architecturally approved, implementation stops here for this session — Stages 3–5 for a fallback-source path are blocked pending that approval.
+  
+## 4. Architecture Validation
+ 
+Only after the audit is resolved, confirm the following against the current repository state before writing implementation code:
+ 
+ 
+- The existing architecture (identifier resolution → Gene Explorer → downstream phases) supports adding a Functional Annotation surface without modification to upstream modules.
+ 
+- No duplicate functionality is being introduced — in particular, confirm no existing module already partially implements GO term display.
+ 
+- No parallel implementation is created alongside Gene Explorer's existing XML handling; this phase extends it, not forks it.
+ 
+- Identifier flow remains intact: this phase consumes the already-resolved Gene/Transcript/Protein identifiers and does not independently resolve gene, transcript, protein, or organism identity anywhere.
+ 
+- No architectural violations of the reuse-first or identifier-immutability principles (Sections 6–7 below).
+ 
+
+ 
+Do not begin Section 5 implementation until this validation is confirmed.
+  
+## 5. Implementation Roadmap
+ 
+### Stage 1 — Parser
+ 
+ 
+- If the audit (Section 3) confirmed Gene XML sufficiency: extend the existing Gene EFetch XML parser to extract GO annotations (`goId`, `term`, `aspect`, `evidenceCode`) alongside the fields it already extracts. Do not build a separate parser file that duplicates existing XML traversal logic — extend the existing one.
+ 
+- If a fallback source is later architecturally approved following Section 3's audit, implement a new isolated parser for gene2go or QuickGO responses, following the existing parser conventions used in Phase 5.5 (same error handling, same return shape conventions) so it's a drop-in sibling, not a stylistic outlier.
+ 
+- In either case, the parser must never fabricate a GO term, evidence code, or annotation. If the source returns nothing, the resulting list is empty — not padded, not defaulted.
+ 
+
+ 
+### Stage 2 — Data Model
+ 
+Implement exactly the following interfaces (from the approved design spec — do not modify field names or types):
+ `interface FunctionalAnnotation {     goId: string;                    // e.g. "GO:0006915" — CANONICAL identifier, never the term name     term: string;                    // e.g. "apoptotic process" — DISPLAY LABEL ONLY     aspect: "biological_process" | "molecular_function" | "cellular_component";     evidenceCode: string;            // GO Consortium's own standard codes (e.g. IEA, TAS, EXP) — preserved as-is     evidenceLabel: string;           // human-readable expansion, e.g. "Inferred from Electronic Annotation"     source: "ncbi-gene-xml" | "gene2go" | "quickgo"; // whichever Section 3's audit confirmed     geneId: string;     geneSymbol: string;     organism: string;   }   ` 
+Build the `evidenceCode` → `evidenceLabel` normalization **once**, at the data layer (e.g. a single lookup table consumed by the parser/model layer), not re-implemented inside individual UI components. Use GO's own published evidence code taxonomy — do not invent a ResearchCoPilot-specific confidence score.
+ 
+`PathwayMembership` (Reactome/WikiPathways) is defined in the design spec for forward reference only. **Do not implement it in this phase** — it belongs to 5.6B (see Section 10, Out of Scope).
+ 
+### Stage 3 — API / Retrieval Layer
+ 
+ 
+- Wire the parser output into whatever retrieval path Section 3's audit confirmed (extended Gene EFetch call, or new `gene2go`/QuickGO call).
+ 
+- Reuse the existing caching layer from Gene Explorer if the data source is the same Gene XML; do not build a second cache.
+ 
+- If a new source was required (and has been architecturally approved per Section 3), implement caching consistent with existing patterns. **Cache by the resolved GeneID (or the repository's existing gene cache namespace) — not by `goId` alone.** A GO ID identifies an ontology term, not a gene's annotation set; the same GO ID (e.g. `GO:0006915`) can legitimately apply to many different genes (TP53, CFTR, etc.), so caching keyed only on `goId` would return the wrong gene's annotations. `goId` remains the canonical identifier for `FunctionalAnnotation` objects and relationships (Section 7), but it is not sufficient as a retrieval cache key on its own.
+ 
+- If the source returns multiple annotations sharing the same `goId` but differing by `evidenceCode` (e.g. one `EXP` and one `IEA` annotation for the same term), preserve each one distinctly — do not deduplicate by `goId`. Only collapse entries if the source itself has already aggregated them upstream; do not invent custom deduplication rules.
+ 
+
+ 
+### Stage 4 — UI
+ 
+ 
+- Display annotations grouped into three collapsible sections by `aspect`: Biological Process, Molecular Function, Cellular Component. Do not render a flat list.
+ 
+- Each group shows its item count in the group header.
+ 
+- Each row displays: `term` (display label), `evidenceCode` with `evidenceLabel` shown on hover/expansion, and enough visual distinction that IEA (computational) annotations are visibly distinguishable from experimentally-derived ones (e.g. EXP, TAS) — without hiding or filtering out IEA-only annotations.
+ 
+- Reuse existing loading-state and empty-state components from Phase 5.5 rather than building new ones.
+ 
+
+ 
+### Stage 5 — Integration
+ 
+ 
+- Integrate the Functional Annotation section into the existing Gene/Protein context view, consuming the already-resolved identifiers per Section 7.
+ 
+- Confirm the section still renders correctly with full Gene/Transcript/Protein context when deep-linked to directly (Section 10 of the design spec — context-awareness rule).
+ 
+
+  
+## 6. Reuse Rules
+ 
+You must reuse, not rebuild:
+ 
+ 
+- Existing API helpers and request/response conventions from Phase 5.2/5.5.
+ 
+- Existing caching infrastructure (extend, don't duplicate).
+ 
+- Existing pagination (Universal Pagination Framework) if any aspect group's count crosses the volume threshold already established in prior phases.
+ 
+- Existing loading states and error-handling UI components.
+ 
+- The identifier flow already resolved upstream — see Section 7.
+ 
+
+ 
+Do not rebuild any of the above from scratch under the assumption that this phase's data shape is "different enough" to justify it. It isn't.
+  
+## 7. Identifier Immutability
+ 
+This rule is permanent and applies to every phase, including this one:
+ 
+**No module in this phase may independently resolve gene, transcript, protein, or organism identity.** This phase always consumes identifiers already resolved by Phase 5.2 (Gene Explorer) and earlier explorers.
+ 
+Additionally, specific to this phase's data model: `goId` (e.g. `GO:0006915`) is the canonical identifier for all internal keys, cache keys, and relationships. `term` (the human-readable GO name) is a **display label only** and must never be used as an identifier anywhere — GO term names are occasionally revised by the GO Consortium, while GO IDs are stable. This mirrors the identical discipline already applied to GeneID, transcript accessions, and ClinVar VCV IDs.
+  
+## 8. Performance Requirements
+ 
+ 
+- Minimize API calls: if Section 3's audit confirms Gene XML sufficiency, this phase must add **zero** new external API calls beyond what Gene Explorer already performs.
+ 
+- If a new source is required, cache aggressively using existing cache infrastructure, keyed by the resolved GeneID (or existing gene cache namespace) — never by `goId` alone (a GO ID identifies an ontology term shared across many genes, not a specific gene's annotation set) and never by `term`.
+ 
+- Apply pagination/lazy loading to any aspect group whose count is large enough to warrant it (genes can have 50–100+ annotations) — reuse the existing Universal Pagination Framework rather than building bespoke pagination.
+ 
+- Do not eagerly fetch full annotation detail for every term if the source supports a cheaper summary-level call; fetch summary-level data (term, aspect, evidence code) by default.
+ 
+- Avoid duplicate requests for the same gene across the session — rely on existing caching to prevent this.
+ 
+
+  
+## 9. Error Handling
+ 
+Specify and implement graceful degradation for:
+ 
+ 
+- **Empty data**: gene has no GO annotations at all → show an explicit empty state per aspect group, not a broken/blank section.
+ 
+- **Unsupported organisms**: if the organism isn't covered by the data source, show a clear "not available for this organism" message rather than a silent failure — note GO does cover many non-human model organisms, so this should be rarer than in Phase 5.5's clinical-data case, but must still be handled.
+ 
+- **API failures**: if the retrieval call fails (whichever source Section 3 confirmed), show a retry-capable error state consistent with existing error-handling patterns from 5.5.
+ 
+- **Malformed identifiers**: should not reach this phase given identifier immutability (Section 7), but defensively handle a malformed/missing `goId` by excluding that row rather than crashing the group.
+ 
+- **Rate limiting**: if hitting a new external source, respect and surface rate-limit backoff consistent with existing patterns used for other NCBI/EBI calls in this project.
+ 
+- **Unavailable annotations for a specific aspect**: if a gene has annotations in only one or two of the three aspects, show the populated groups and an explicit "no annotations found" state for the empty ones — do not hide the empty aspect groups entirely, since their absence is itself informative.
+ 
+
+ 
+The UI must always degrade gracefully; it must never hard-fail the entire Gene/Protein context view due to a Functional Annotation retrieval issue.
+  
+## 10. Out-of-Scope List (This Phase Only)
+ 
+Explicitly excluded from 5.6A:
+ 
+ 
+- **Pathway data of any kind** — Reactome and WikiPathways integration is 5.6B, not this phase. Do not implement `PathwayMembership` retrieval or display here.
+ 
+- **KEGG** — not justified by default under current licensing terms; excluded entirely unless a separate legal/licensing review clears it (5.6B's job, not 5.6A's).
+ 
+- **Pathway diagram/graph visualization** — out of scope for the entire 5.6 phase, closer to Structures (5.8) or a future effort.
+ 
+- **Disease/drug-target implications** of functional annotations — that's Phase 5.9.
+ 
+- **Any LLM-generated interpretation** of biological function — display only what the source provides.
+ 
+- **Standalone GO-term search** — unlike Variant Explorer's deliberate rsID exception, this phase's data is only reached downstream of an already-resolved gene/protein; there is no standalone entry point.
+ 
+- **Hardening, cross-species end-to-end validation, and the `v5.6-complete` tag** — that is 5.6C's job, after 5.6B is also complete.
+ 
+
+  
+## 11. Stop Point
+ 
+Implement **Phase 5.6A only**: the mandatory audit, the `FunctionalAnnotation` model, retrieval (reusing Gene EFetch XML if confirmed, or the minimal confirmed fallback source if not), aspect-grouped display, and evidence code handling.
+ 
+**Do not begin 5.6B** (pathway integration) or 5.6C (hardening/tagging). Do not implement any future roadmap items. Stop once the Section 12 checklist below is satisfied for 5.6A's scope.
+  
+## 12. Completion Checklist
+ 
+ 
+- [ ] Mandatory audit completed and documented, including the four-gene (TP53, BRCA1, CFTR, Trp53) GO-coverage comparison against a reference source
+ 
+- [ ] Audit conclusion (Gene XML sufficient vs. fallback source required) explicitly stated with evidence
+ 
+- [ ] Architecture validated against current repo state before implementation began
+ 
+- [ ] `FunctionalAnnotation` model implemented exactly as specified, with `goId` as canonical identifier
+ 
+- [ ] Parser extends existing Gene XML parsing (or implements the minimal justified fallback) without duplicating existing logic
+ 
+- [ ] Evidence code → label normalization implemented once, at the data layer
+ 
+- [ ] No new external API calls added if the audit confirmed Gene XML sufficiency
+ 
+- [ ] Aspect-grouped, collapsible UI implemented (not a flat list), with per-group counts
+ 
+- [ ] Pagination reused (not rebuilt) for any large aspect group
+ 
+- [ ] Empty/error/rate-limit/unsupported-organism states all handled gracefully per Section 9
+ 
+- [ ] No independent identifier resolution introduced anywhere in this phase
+ 
+- [ ] Deep-link context-awareness confirmed (Section 10 of the design spec)
+ 
+- [ ] No pathway data, KEGG, diagrams, or LLM interpretation implemented
+ 
+- [ ] TypeScript clean, no regressions to Phases 5.2–5.5
+ 
+- [ ] Documentation written for the audit findings and any new source integration
