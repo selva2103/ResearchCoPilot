@@ -1,3 +1,4 @@
 {
-  "/api/gene/go/route": "app/api/gene/go/route.js"
+  "/api/gene/go/route": "app/api/gene/go/route.js",
+  "/page": "app/page.js"
 }
