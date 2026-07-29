@@ -1,34 +1,23 @@
 "use client";
 
 /**
- * components/BiologicalFunctionPanel.tsx — GO Functional Annotation display (Phase 5.6A)
+ * components/BiologicalFunctionPanel.tsx — Biological Function display (Phase 5.6A + 5.6B)
  *
- * Renders Gene Ontology annotations grouped into three collapsible aspect sections:
- *   - Molecular Function   (GO aspect: molecular_function)
- *   - Biological Process   (GO aspect: biological_process)
- *   - Cellular Component   (GO aspect: cellular_component)
+ * Phase 5.6A (GO Foundation):
+ *   Renders Gene Ontology annotations grouped into three collapsible aspect sections:
+ *   - Molecular Function / Biological Process / Cellular Component
+ *   Source: NCBI Gene EFetch XML via /api/gene/go
  *
- * LAZY LOAD: GO data is fetched on first expand of the panel header.
- *   No NCBI call is made until the researcher explicitly opens the section.
+ * Phase 5.6B (Pathway Integration):
+ *   Adds a "Pathways" subsection alongside the GO aspects — NOT merged into them.
+ *   Source: Reactome Analysis Service via /api/gene/pathways
+ *   Flat list grouped by source (reactome), linked to Reactome PathwayBrowser.
+ *   Pagination: 20 per page (TP53 has 129 pathways — warranted per Step 6 check).
  *
- * EVIDENCE CODE DISPLAY:
- *   - evidenceCode shown in a chip on each row
- *   - evidenceLabel shown on hover/title (tooltip)
- *   - Computational annotations (IEA and related codes) are visually distinct:
- *     lighter weight, italic term name, "computational" label — not hidden.
- *   - Experimental annotations (EXP, IDA, IMP, etc.) are shown normally.
- *
- * PAGINATION:
- *   Client-side slice within each aspect group (all data in-memory after one fetch).
- *   Groups with > GO_ASPECT_PAGE_SIZE annotations show a "Show More" button.
- *   Reuses the established client-side pagination pattern from TranscriptExplorer.
- *
- * EMPTY / ERROR STATES (per Phase 5.6A §9):
- *   - Each aspect section shows an explicit "no annotations" message when empty —
- *     NOT hidden, because absence of a GO aspect is itself informative.
- *   - Gene not annotated: explicit "no GO annotations" empty state.
- *   - API failure: retry-capable error state; never crashes the parent card.
- *   - Rate limit: specific amber warning (same treatment as Phase 5.5).
+ * LAZY LOAD:
+ *   Both GO and Pathway fetches are triggered on first panel open.
+ *   No network call is made until the researcher explicitly expands the section.
+ *   Each subsection has independent loading/error/retry state.
  *
  * IDENTIFIER IMMUTABILITY:
  *   geneId, geneSymbol, and organism are consumed from the GeneRecord prop.
@@ -39,12 +28,14 @@ import { useState, useRef } from "react";
 import type { GeneRecord } from "@/types/gene-record";
 import type { FunctionalAnnotation } from "@/types/functional-annotation";
 import { isComputationalEvidence } from "@/types/functional-annotation";
+import type { PathwayMembership } from "@/types/pathway-membership";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const GO_ASPECT_PAGE_SIZE = 20;
+const PATHWAY_PAGE_SIZE = 20;
 
-// ─── Aspect display config ────────────────────────────────────────────────────
+// ─── GO Aspect display config ─────────────────────────────────────────────────
 
 interface AspectConfig {
   key: FunctionalAnnotation["aspect"];
@@ -60,30 +51,44 @@ const ASPECTS: AspectConfig[] = [
     label: "Molecular Function",
     icon: "⚙️",
     colorClass: "text-violet-700 dark:text-violet-300",
-    badgeClass: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200",
+    badgeClass:
+      "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200",
   },
   {
     key: "biological_process",
     label: "Biological Process",
     icon: "🔄",
     colorClass: "text-emerald-700 dark:text-emerald-300",
-    badgeClass: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200",
+    badgeClass:
+      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200",
   },
   {
     key: "cellular_component",
     label: "Cellular Component",
     icon: "🏗️",
     colorClass: "text-sky-700 dark:text-sky-300",
-    badgeClass: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
+    badgeClass:
+      "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
   },
 ];
 
-// ─── Response shape from /api/gene/go ────────────────────────────────────────
+// ─── API response shapes ──────────────────────────────────────────────────────
 
 interface GoApiResponse {
   module: string;
   status: "success" | "empty" | "error";
   data: FunctionalAnnotation[];
+  count: number;
+  error: { code: string; message: string } | null;
+  cached: boolean;
+  executionTimeMs: number;
+  timestamp: string;
+}
+
+interface PathwaysApiResponse {
+  module: string;
+  status: "success" | "empty" | "error";
+  data: PathwayMembership[];
   count: number;
   error: { code: string; message: string } | null;
   cached: boolean;
@@ -99,19 +104,31 @@ interface BiologicalFunctionPanelProps {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPanelProps) {
+export default function BiologicalFunctionPanel({
+  gene,
+}: BiologicalFunctionPanelProps) {
   // ── Panel open/close ────────────────────────────────────────────────────────
   const [isOpen, setIsOpen] = useState(false);
 
-  // ── Fetch state ─────────────────────────────────────────────────────────────
-  const [fetchState, setFetchState] = useState<
+  // ── GO fetch state ──────────────────────────────────────────────────────────
+  const [goState, setGoState] = useState<
     "idle" | "loading" | "success" | "empty" | "error"
   >("idle");
   const [annotations, setAnnotations] = useState<FunctionalAnnotation[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isRateLimit, setIsRateLimit] = useState(false);
+  const [goError, setGoError] = useState<string | null>(null);
+  const [goIsRateLimit, setGoIsRateLimit] = useState(false);
+  const goFetchedRef = useRef(false);
 
-  // ── Per-aspect visible counts (client-side pagination) ──────────────────────
+  // ── Pathway fetch state ─────────────────────────────────────────────────────
+  const [pathwayState, setPathwayState] = useState<
+    "idle" | "loading" | "success" | "empty" | "error"
+  >("idle");
+  const [pathways, setPathways] = useState<PathwayMembership[]>([]);
+  const [pathwayError, setPathwayError] = useState<string | null>(null);
+  const [pathwayIsRateLimit, setPathwayIsRateLimit] = useState(false);
+  const pathwayFetchedRef = useRef(false);
+
+  // ── GO per-aspect visible counts (client-side pagination) ───────────────────
   const [visibleCounts, setVisibleCounts] = useState<
     Record<FunctionalAnnotation["aspect"], number>
   >({
@@ -120,7 +137,7 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
     cellular_component: GO_ASPECT_PAGE_SIZE,
   });
 
-  // ── Aspect open/close ───────────────────────────────────────────────────────
+  // ── GO aspect open/close ────────────────────────────────────────────────────
   const [openAspects, setOpenAspects] = useState<
     Record<FunctionalAnnotation["aspect"], boolean>
   >({
@@ -129,16 +146,20 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
     cellular_component: true,
   });
 
-  // ── Fetch guard — only call once ────────────────────────────────────────────
-  const fetchedRef = useRef(false);
+  // ── Pathway visible count (client-side pagination) ──────────────────────────
+  const [pathwayVisibleCount, setPathwayVisibleCount] =
+    useState(PATHWAY_PAGE_SIZE);
+
+  // ── Pathway subsection open/close ───────────────────────────────────────────
+  const [pathwaySubOpen, setPathwaySubOpen] = useState(true);
 
   // ── Fetch GO annotations ────────────────────────────────────────────────────
-  const fetchAnnotations = async () => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-    setFetchState("loading");
-    setErrorMessage(null);
-    setIsRateLimit(false);
+  const fetchGoAnnotations = async () => {
+    if (goFetchedRef.current) return;
+    goFetchedRef.current = true;
+    setGoState("loading");
+    setGoError(null);
+    setGoIsRateLimit(false);
 
     try {
       const res = await fetch("/api/gene/go", {
@@ -158,51 +179,106 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
         const rateLimited =
           result.error?.code === "RATE_LIMITED" ||
           Boolean(result.error?.message?.includes("429")) ||
-          Boolean(result.error?.message?.toLowerCase().includes("rate limit"));
-        setIsRateLimit(rateLimited);
-        setErrorMessage(
-          result.error?.message ?? "Failed to load functional annotations."
+          Boolean(
+            result.error?.message?.toLowerCase().includes("rate limit"),
+          );
+        setGoIsRateLimit(rateLimited);
+        setGoError(
+          result.error?.message ?? "Failed to load functional annotations.",
         );
-        setFetchState("error");
-        fetchedRef.current = false; // Allow retry
+        setGoState("error");
+        goFetchedRef.current = false;
         return;
       }
 
       if (result.status === "empty" || result.data.length === 0) {
-        setFetchState("empty");
+        setGoState("empty");
         return;
       }
 
       setAnnotations(result.data);
-      setFetchState("success");
+      setGoState("success");
     } catch (err) {
-      setErrorMessage(
+      setGoError(
         err instanceof Error
           ? err.message
-          : "Network error — could not reach the annotation service."
+          : "Network error — could not reach the annotation service.",
       );
-      setFetchState("error");
-      fetchedRef.current = false; // Allow retry
+      setGoState("error");
+      goFetchedRef.current = false;
     }
   };
 
+  // ── Fetch pathway memberships ───────────────────────────────────────────────
+  const fetchPathways = async () => {
+    if (pathwayFetchedRef.current) return;
+    pathwayFetchedRef.current = true;
+    setPathwayState("loading");
+    setPathwayError(null);
+    setPathwayIsRateLimit(false);
+
+    try {
+      const res = await fetch("/api/gene/pathways", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          geneId: gene.geneId,
+          geneSymbol: gene.officialSymbol,
+          organism: gene.organism,
+        }),
+      });
+
+      const result: PathwaysApiResponse = await res.json();
+
+      if (result.status === "error") {
+        const rateLimited =
+          result.error?.code === "RATE_LIMITED" ||
+          Boolean(result.error?.message?.includes("429")) ||
+          Boolean(
+            result.error?.message?.toLowerCase().includes("rate limit"),
+          );
+        setPathwayIsRateLimit(rateLimited);
+        setPathwayError(
+          result.error?.message ?? "Failed to load pathway memberships.",
+        );
+        setPathwayState("error");
+        pathwayFetchedRef.current = false;
+        return;
+      }
+
+      if (result.status === "empty" || result.data.length === 0) {
+        setPathwayState("empty");
+        return;
+      }
+
+      setPathways(result.data);
+      setPathwayState("success");
+    } catch (err) {
+      setPathwayError(
+        err instanceof Error
+          ? err.message
+          : "Network error — could not reach the pathway service.",
+      );
+      setPathwayState("error");
+      pathwayFetchedRef.current = false;
+    }
+  };
+
+  // ── Panel toggle — triggers both fetches on first open ─────────────────────
   const handleToggle = () => {
     const opening = !isOpen;
     setIsOpen(opening);
-    if (opening && fetchState === "idle") {
-      fetchAnnotations();
+    if (opening) {
+      if (goState === "idle") fetchGoAnnotations();
+      if (pathwayState === "idle") fetchPathways();
     }
   };
 
-  const handleRetry = () => {
-    fetchedRef.current = false;
-    setFetchState("loading");
-    setErrorMessage(null);
-    fetchAnnotations();
-  };
-
-  // ── Group annotations by aspect ─────────────────────────────────────────────
-  const byAspect: Record<FunctionalAnnotation["aspect"], FunctionalAnnotation[]> = {
+  // ── Group GO annotations by aspect ─────────────────────────────────────────
+  const byAspect: Record<
+    FunctionalAnnotation["aspect"],
+    FunctionalAnnotation[]
+  > = {
     molecular_function: [],
     biological_process: [],
     cellular_component: [],
@@ -211,7 +287,9 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
     byAspect[ann.aspect].push(ann);
   }
 
-  const totalCount = annotations.length;
+  const totalGoCount = annotations.length;
+  const totalPathwayCount = pathways.length;
+  const isAnyLoading = goState === "loading" || pathwayState === "loading";
 
   return (
     <div className="pt-3 border-t border-slate-100 dark:border-slate-700/50 space-y-2">
@@ -225,12 +303,17 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
         <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wide">
           Biological Function
         </p>
-        {fetchState === "success" && totalCount > 0 && (
+        {goState === "success" && totalGoCount > 0 && (
           <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">
-            {totalCount} annotation{totalCount !== 1 ? "s" : ""}
+            {totalGoCount} GO
           </span>
         )}
-        {fetchState === "loading" && (
+        {pathwayState === "success" && totalPathwayCount > 0 && (
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">
+            {totalPathwayCount} pathways
+          </span>
+        )}
+        {isAnyLoading && (
           <span className="ml-1 text-slate-400">
             <SmallSpinner />
           </span>
@@ -242,31 +325,232 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
 
       {/* ── Panel body ───────────────────────────────────────────────────── */}
       {isOpen && (
-        <div className="space-y-3 pl-1">
-          {/* Loading */}
-          {fetchState === "loading" && (
-            <div className="flex items-center gap-2 py-3">
+        <div className="space-y-4 pl-1">
+          {/* ────────────── GO ANNOTATIONS SECTION ────────────────────── */}
+          <GoAnnotationsSection
+            gene={gene}
+            state={goState}
+            annotations={annotations}
+            byAspect={byAspect}
+            totalCount={totalGoCount}
+            errorMessage={goError}
+            isRateLimit={goIsRateLimit}
+            visibleCounts={visibleCounts}
+            openAspects={openAspects}
+            onRetry={() => {
+              goFetchedRef.current = false;
+              setGoState("loading");
+              setGoError(null);
+              fetchGoAnnotations();
+            }}
+            onToggleAspect={(key) =>
+              setOpenAspects((prev) => ({ ...prev, [key]: !prev[key] }))
+            }
+            onShowMore={(key) =>
+              setVisibleCounts((prev) => ({
+                ...prev,
+                [key]: prev[key] + GO_ASPECT_PAGE_SIZE,
+              }))
+            }
+          />
+
+          {/* ────────────── PATHWAYS SECTION ──────────────────────────── */}
+          <PathwaysSection
+            gene={gene}
+            state={pathwayState}
+            pathways={pathways}
+            totalCount={totalPathwayCount}
+            errorMessage={pathwayError}
+            isRateLimit={pathwayIsRateLimit}
+            visibleCount={pathwayVisibleCount}
+            isSubOpen={pathwaySubOpen}
+            onToggleSub={() => setPathwaySubOpen((v) => !v)}
+            onRetry={() => {
+              pathwayFetchedRef.current = false;
+              setPathwayState("loading");
+              setPathwayError(null);
+              fetchPathways();
+            }}
+            onShowMore={() =>
+              setPathwayVisibleCount((n) => n + PATHWAY_PAGE_SIZE)
+            }
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── GO Annotations Section ────────────────────────────────────────────────────
+
+function GoAnnotationsSection({
+  gene,
+  state,
+  annotations,
+  byAspect,
+  totalCount,
+  errorMessage,
+  isRateLimit,
+  visibleCounts,
+  openAspects,
+  onRetry,
+  onToggleAspect,
+  onShowMore,
+}: {
+  gene: GeneRecord;
+  state: "idle" | "loading" | "success" | "empty" | "error";
+  annotations: FunctionalAnnotation[];
+  byAspect: Record<FunctionalAnnotation["aspect"], FunctionalAnnotation[]>;
+  totalCount: number;
+  errorMessage: string | null;
+  isRateLimit: boolean;
+  visibleCounts: Record<FunctionalAnnotation["aspect"], number>;
+  openAspects: Record<FunctionalAnnotation["aspect"], boolean>;
+  onRetry: () => void;
+  onToggleAspect: (key: FunctionalAnnotation["aspect"]) => void;
+  onShowMore: (key: FunctionalAnnotation["aspect"]) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {/* Section label */}
+      <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+        Gene Ontology
+      </p>
+
+      {state === "loading" && (
+        <div className="flex items-center gap-2 py-2">
+          <SmallSpinner />
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Loading GO annotations…
+          </p>
+        </div>
+      )}
+
+      {state === "error" && (
+        <div className="space-y-1.5 py-1">
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {isRateLimit
+              ? "⚠️ NCBI rate limit hit — GO data temporarily unavailable. Try again in a few seconds."
+              : `⚠️ ${errorMessage ?? "Failed to load functional annotations."}`}
+          </p>
+          <button
+            onClick={onRetry}
+            className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-3 py-1.5 rounded-full hover:bg-amber-200 font-medium transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {state === "empty" && (
+        <p className="text-xs text-slate-400 dark:text-slate-500 italic py-1">
+          No Gene Ontology annotations found for {gene.officialSymbol} in NCBI
+          Gene.
+        </p>
+      )}
+
+      {state === "success" && (
+        <div className="space-y-2">
+          {ASPECTS.map((aspect) => (
+            <AspectSection
+              key={aspect.key}
+              config={aspect}
+              annotations={byAspect[aspect.key]}
+              visibleCount={visibleCounts[aspect.key]}
+              isOpen={openAspects[aspect.key]}
+              onToggle={() => onToggleAspect(aspect.key)}
+              onShowMore={() => onShowMore(aspect.key)}
+            />
+          ))}
+          <p className="text-xs text-slate-400 dark:text-slate-500 italic pt-0.5">
+            GO annotations from NCBI Gene (GOA). Evidence codes follow GO
+            Consortium standards.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Pathways Section ─────────────────────────────────────────────────────────
+
+function PathwaysSection({
+  gene,
+  state,
+  pathways,
+  totalCount,
+  errorMessage,
+  isRateLimit,
+  visibleCount,
+  isSubOpen,
+  onToggleSub,
+  onRetry,
+  onShowMore,
+}: {
+  gene: GeneRecord;
+  state: "idle" | "loading" | "success" | "empty" | "error";
+  pathways: PathwayMembership[];
+  totalCount: number;
+  errorMessage: string | null;
+  isRateLimit: boolean;
+  visibleCount: number;
+  isSubOpen: boolean;
+  onToggleSub: () => void;
+  onRetry: () => void;
+  onShowMore: () => void;
+}) {
+  const visible = pathways.slice(0, visibleCount);
+  const hasMore = totalCount > visibleCount;
+
+  return (
+    <div className="space-y-2">
+      {/* Section header */}
+      <button
+        onClick={onToggleSub}
+        className="w-full flex items-center gap-2 text-left group"
+        aria-expanded={isSubOpen}
+        disabled={state === "loading" || state === "idle"}
+      >
+        <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+          Pathways
+        </p>
+        {state === "success" && totalCount > 0 && (
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">
+            {totalCount}
+          </span>
+        )}
+        {state === "loading" && (
+          <span className="ml-1 text-slate-400">
+            <SmallSpinner />
+          </span>
+        )}
+        {(state === "success" || state === "empty") && (
+          <span className="ml-auto text-xs text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors">
+            {isSubOpen ? "▲" : "▼"}
+          </span>
+        )}
+      </button>
+
+      {isSubOpen && (
+        <>
+          {state === "loading" && (
+            <div className="flex items-center gap-2 py-2">
               <SmallSpinner />
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                Loading GO annotations…
+                Loading Reactome pathways…
               </p>
             </div>
           )}
 
-          {/* Error */}
-          {fetchState === "error" && (
-            <div className="space-y-1.5 py-2">
-              {isRateLimit ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  ⚠️ NCBI rate limit hit — functional annotation data temporarily unavailable. Try again in a few seconds.
-                </p>
-              ) : (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  ⚠️ {errorMessage ?? "Failed to load functional annotations."}
-                </p>
-              )}
+          {state === "error" && (
+            <div className="space-y-1.5 py-1">
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {isRateLimit
+                  ? "⚠️ Reactome rate limit hit — pathway data temporarily unavailable. Try again in a few seconds."
+                  : `⚠️ ${errorMessage ?? "Failed to load pathway memberships."}`}
+              </p>
               <button
-                onClick={handleRetry}
+                onClick={onRetry}
                 className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-3 py-1.5 rounded-full hover:bg-amber-200 font-medium transition-colors"
               >
                 Retry
@@ -274,50 +558,96 @@ export default function BiologicalFunctionPanel({ gene }: BiologicalFunctionPane
             </div>
           )}
 
-          {/* Empty — gene has no GO annotations */}
-          {fetchState === "empty" && (
+          {state === "empty" && (
             <p className="text-xs text-slate-400 dark:text-slate-500 italic py-1">
-              No Gene Ontology annotations found for {gene.officialSymbol} in NCBI Gene.
+              No Reactome pathway memberships found for {gene.officialSymbol}.
             </p>
           )}
 
-          {/* Success — aspect groups */}
-          {fetchState === "success" && (
-            <div className="space-y-3">
-              {ASPECTS.map((aspect) => (
-                <AspectSection
-                  key={aspect.key}
-                  config={aspect}
-                  annotations={byAspect[aspect.key]}
-                  visibleCount={visibleCounts[aspect.key]}
-                  isOpen={openAspects[aspect.key]}
-                  onToggle={() =>
-                    setOpenAspects((prev) => ({
-                      ...prev,
-                      [aspect.key]: !prev[aspect.key],
-                    }))
-                  }
-                  onShowMore={() =>
-                    setVisibleCounts((prev) => ({
-                      ...prev,
-                      [aspect.key]: prev[aspect.key] + GO_ASPECT_PAGE_SIZE,
-                    }))
-                  }
-                />
-              ))}
+          {state === "success" && (
+            <div className="rounded-lg border border-slate-100 dark:border-slate-700/60 overflow-hidden">
+              {/* Source header */}
+              <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/40 flex items-center gap-2">
+                <span className="text-xs font-semibold text-orange-700 dark:text-orange-300">
+                  🔬 Reactome
+                </span>
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">
+                  {totalCount}
+                </span>
+                <span className="ml-auto text-xs text-slate-400 dark:text-slate-500">
+                  curated pathways
+                </span>
+              </div>
 
-              <p className="text-xs text-slate-400 dark:text-slate-500 italic pt-1">
-                GO annotations from NCBI Gene (GOA). Evidence codes follow GO Consortium standards.
+              {/* Pathway rows */}
+              <div className="divide-y divide-slate-50 dark:divide-slate-700/30">
+                {visible.map((pw) => (
+                  <PathwayRow key={pw.pathwayId} pathway={pw} />
+                ))}
+              </div>
+
+              {/* Pagination */}
+              {hasMore && (
+                <div className="px-3 py-2 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/20">
+                  <button
+                    onClick={onShowMore}
+                    className="text-xs font-medium px-3 py-1 rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200 hover:opacity-80 transition-opacity"
+                  >
+                    Show {Math.min(PATHWAY_PAGE_SIZE, totalCount - visibleCount)}{" "}
+                    more
+                  </button>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {visibleCount} of {totalCount}
+                  </span>
+                </div>
+              )}
+
+              <p className="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 italic border-t border-slate-50 dark:border-slate-700/30">
+                Source: Reactome — curated human and model organism pathways.
               </p>
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-// ─── Aspect section ───────────────────────────────────────────────────────────
+// ─── Individual pathway row ───────────────────────────────────────────────────
+
+function PathwayRow({ pathway }: { pathway: PathwayMembership }) {
+  return (
+    <div className="px-3 py-2 flex items-start gap-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+      {/* Pathway ID — canonical identifier, monospace, smaller */}
+      <span className="shrink-0 text-xs font-mono text-slate-400 dark:text-slate-500 mt-0.5 select-all whitespace-nowrap">
+        {pathway.pathwayId}
+      </span>
+
+      {/* Pathway name — linked to sourceUrl */}
+      <a
+        href={pathway.sourceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex-1 text-xs text-slate-700 dark:text-slate-200 hover:text-orange-600 dark:hover:text-orange-400 hover:underline leading-relaxed transition-colors"
+        title={`View ${pathway.pathwayName} in Reactome PathwayBrowser`}
+      >
+        {pathway.pathwayName}
+      </a>
+
+      {/* Disease flag (optional) */}
+      {pathway.inDisease && (
+        <span
+          className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+          title="Disease pathway"
+        >
+          disease
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── GO Aspect section ────────────────────────────────────────────────────────
 
 function AspectSection({
   config,
@@ -340,7 +670,6 @@ function AspectSection({
 
   return (
     <div className="rounded-lg border border-slate-100 dark:border-slate-700/60 overflow-hidden">
-      {/* Aspect header */}
       <button
         onClick={onToggle}
         className="w-full flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-slate-800/40 text-left hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
@@ -360,27 +689,29 @@ function AspectSection({
         </span>
       </button>
 
-      {/* Annotation rows */}
       {isOpen && (
         <div className="divide-y divide-slate-50 dark:divide-slate-700/30">
           {total === 0 ? (
-            /* Explicitly show empty aspect — absence is informative */
             <p className="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 italic">
-              No {config.label.toLowerCase()} annotations in NCBI Gene for this gene.
+              No {config.label.toLowerCase()} annotations in NCBI Gene for this
+              gene.
             </p>
           ) : (
             <>
               {visible.map((ann, idx) => (
-                <AnnotationRow key={`${ann.goId}-${ann.evidenceCode}-${idx}`} annotation={ann} />
+                <AnnotationRow
+                  key={`${ann.goId}-${ann.evidenceCode}-${idx}`}
+                  annotation={ann}
+                />
               ))}
-              {/* Show More */}
               {hasMore && (
                 <div className="px-3 py-2 flex items-center justify-between">
                   <button
                     onClick={onShowMore}
                     className={`text-xs font-medium px-3 py-1 rounded-full transition-colors ${config.badgeClass} hover:opacity-80`}
                   >
-                    Show {Math.min(GO_ASPECT_PAGE_SIZE, total - visibleCount)} more
+                    Show {Math.min(GO_ASPECT_PAGE_SIZE, total - visibleCount)}{" "}
+                    more
                   </button>
                   <span className="text-xs text-slate-400 dark:text-slate-500">
                     {visibleCount} of {total}
@@ -395,19 +726,16 @@ function AspectSection({
   );
 }
 
-// ─── Individual annotation row ────────────────────────────────────────────────
+// ─── Individual GO annotation row ─────────────────────────────────────────────
 
 function AnnotationRow({ annotation }: { annotation: FunctionalAnnotation }) {
   const isComputational = isComputationalEvidence(annotation.evidenceCode);
 
   return (
     <div className="px-3 py-2 flex items-start gap-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-      {/* GO ID — canonical identifier, monospace */}
       <span className="shrink-0 text-xs font-mono text-slate-400 dark:text-slate-500 mt-0.5 select-all">
         {annotation.goId}
       </span>
-
-      {/* Term name */}
       <span
         className={`flex-1 text-xs leading-relaxed ${
           isComputational
@@ -417,8 +745,6 @@ function AnnotationRow({ annotation }: { annotation: FunctionalAnnotation }) {
       >
         {annotation.term}
       </span>
-
-      {/* Evidence code chip with label on hover */}
       <span
         title={annotation.evidenceLabel}
         className={`shrink-0 text-xs font-mono px-1.5 py-0.5 rounded cursor-help ${
