@@ -1,0 +1,227 @@
+PHASE 5.6B — PATHWAY INTEGRATION (Reactome/WikiPathways Retrieval + PathwayMembership Model + Combined Display with GO — NO diagrams, NO KEGG)
+ 
+PROJECT CONTEXT — READ FIRST
+ 
+Pull the latest GitHub commit before starting.
+ 
+Completed phases (do NOT rebuild any of these):
+
+- 
+
+PubMed Explorer, GEO Explorer, Universal Pagination, Sequence Foundation (5.1) + Gene FASTA download
+
+- 
+
+Biological Query Resolver (Phase R)
+
+- 
+
+Gene Explorer (5.2), Transcript Explorer (5.3A/B/C)
+ 
+- 
+
+Protein Explorer Foundation (5.4A) + Protein Research Context (5.4B) — tagged `v5.4-complete`
+ 
+- 
+
+Variant Explorer + Clinical Evidence + VariantResearchContext — tagged `v5.5-complete`
+ 
+- 
+
+Phase 5.6A — GO Foundation (`FunctionalAnnotation` model, retrieval, aspect-grouped display) — REQUIRED PREREQUISITE, verify in Step 0 before proceeding.
+ 
+This phase builds ONLY pathway membership data (Reactome and/or WikiPathways, per Step 1's audit) displayed alongside the existing GO annotations from 5.6A. Do NOT create a `v5.6-complete` tag in this session — that only happens after 5.6A, 5.6B, and 5.6C are all complete.
+ 
+STEP 0 — VERIFY THE 5.6A PREREQUISITE (do this first, before anything else)
+ 
+`PathwayMembership` is designed to sit alongside `FunctionalAnnotation` from Phase 5.6A. Before proceeding:
+ 
+ 
+1. Check for `PHASE-5.6A-FINAL-REPORT.md` and the `FunctionalAnnotation` type/retrieval code in the repository.
+ 
+ 
+2. **If 5.6A is confirmed present and working** (the type exists, GO annotations actually render in the app): proceed to Step 1.
+ 
+ 
+3. **If 5.6A does NOT exist or is incomplete**: STOP. Do not attempt to build pathway integration on top of a missing foundation, and do not build a minimal placeholder `FunctionalAnnotation` yourself as a workaround — that would be an unreviewed architectural decision. Write `PHASE-5.6B-BLOCKED.md` stating exactly what's missing, and end the session there. This is the one condition under which stopping immediately, without further exploration, is the correct action.
+ 
+IMPLEMENTATION SAFETY
+ 
+ 
+4. Create a git checkpoint before making any change.
+ 
+ 
+5. Run TypeScript after each step. Fix regressions immediately.
+ 
+ 
+6. Never commit code that does not compile.
+ 
+ 
+7. **Push after every commit, verified via `git ls-remote origin main`.**
+ 
+**Architecture Freeze Rule:** The Phase 5.6B Architecture Design Specification is the authority. Adapt implementation details only where repository structure or Step 1's audit requires it.
+ 
+**Architecture Escalation Rule:** If Step 1's audit shows Reactome genuinely requires a new UniProt/Ensembl mapping dependency this project doesn't have — STOP, document it in `PHASE-5.6B-AUDIT-FINDINGS.md` (including exactly what a UniProt-mapping addition would require), and wait for review. Do not add a UniProt integration unilaterally to make Reactome work — that's a decision for the user/senior coder.
+ 
+**Immutability Rule:** `FunctionalAnnotation` (5.6A) and everything before it are frozen. This phase adds `PathwayMembership` alongside it, without modifying 5.6A's model, retrieval, or caching.
+ 
+**Public Contract Stability:** Do not rename or reshape any existing exported type, including `FunctionalAnnotation`.
+ 
+**Documentation Freeze:** Create/update only `PHASE-5.6B-AUDIT-FINDINGS.md` and `PHASE-5.6B-FINAL-REPORT.md` (or `PHASE-5.6B-BLOCKED.md` per Step 0).
+ 
+NON-NEGOTIABLE ARCHITECTURAL CONSTRAINTS
+ 
+ 
+- 
+
+`pathwayId` is the canonical identifier everywhere internally (e.g. Reactome's `R-HSA-109581` or WikiPathways' `WP254`) — `pathwayName` is display-only, never used as a key.
+
+- 
+
+**The audit — not prior expectations — determines the production retrieval source.** Do not pre-assume Reactome as primary; Step 1 must decide this from real evidence.
+
+- 
+
+**Duplicate pathways across sources:** if the same biological pathway appears in both Reactome and WikiPathways (or whichever sources are used), do NOT attempt to merge them or infer equivalence between their IDs. Preserve source attribution and display each source's entry separately, even if a researcher would recognize them as "the same" pathway conceptually. Only treat two entries as one if their canonical IDs are literally identical (which will not occur across different databases) — never merge based on name similarity or inferred equivalence.
+
+- 
+
+**Identifier immutability:** this phase consumes `geneId` and `organism` already resolved upstream by Phase R / Gene Explorer. It must NEVER independently resolve gene identity — no new symbol-to-ID lookup, no new ambiguity handling. If the GeneID passed in doesn't produce results from a source, that's an empty result, not a trigger to re-resolve anything.
+
+- 
+
+This is the first genuinely new external host in this project (not NCBI Entrez family) — unless Step 1's reuse-first check (Step 1.0) finds this data already available in Gene XML, in which case no new host is needed at all. If a new host is required, build a new, minimal, dedicated client — do not force it through the existing NCBI-specific client — but apply the same rate-limiter/retry/ cache-separation philosophy already established, scoped independently to this new host.
+
+- 
+
+No pathway diagram/visualization rendering — membership listing only. This is the most likely feature-creep temptation in this phase, since both Reactome and WikiPathways offer diagram image endpoints — do not embed them.
+
+- 
+
+No KEGG integration under any circumstance in this phase.
+
+- 
+
+No LLM-generated interpretation of pathway relevance.
+
+- 
+
+Never fabricate a pathway membership — empty means empty.
+ 
+STEP 1 — MANDATORY IDENTIFIER-COMPATIBILITY AUDIT
+ 
+Do this before writing any implementation code. Write findings to `PHASE-5.6B-AUDIT-FINDINGS.md`, including a decision-log table (source considered, decision, reason — same format used in every prior audit in this project).
+ 
+ 
+1. **Reuse-first check (do this before testing any new external host):** Does the Gene EFetch XML data already fetched in 5.6A/Gene Explorer already expose pathway cross-references (e.g. Reactome IDs sometimes appear in NCBI Gene records' external database links)? This is the same "can we reuse existing data before adding another API" question that made 5.6A's GO retrieval nearly free — verify it here before assuming a new host is needed at all.
+ 
+
+ 
+1.1. **Presence is not sufficient — verify completeness.** If Gene EFetch XML contains pathway cross-references, compare their completeness against the candidate external source(s) (Reactome and/or WikiPathways) for the representative audit genes before concluding Gene XML is sufficient for production retrieval. As established in Phase 5.6A, the audit must distinguish between "data is present" and "coverage is sufficiently complete." Document the comparison and evidence in `PHASE-5.6B-AUDIT-FINDINGS.md` before deciding whether a new external retrieval source is necessary.
+ 
+ 
+2. **Reactome and WikiPathways — broad identifier audit, not a pre-assumed conclusion.** Determine which identifiers, if any, each source accepts directly from the identifiers already available in ResearchCoPilot (GeneID, gene symbol, organism, Ensembl ID if present anywhere in the chain). Test both sources' real APIs directly with a known gene (TP53) rather than assuming in advance which one will need additional identifier translation. If additional identifier translation is genuinely required for a given source, document exactly which identifiers and which translation service would be needed before proceeding — do not decide this from documentation alone without a live test call.
+ 
+ 
+3. Confirm whichever source(s) prove usable also return correct results for a non-human gene (Trp53), since both Reactome and WikiPathways are expected to cover model organisms.
+ 
+4. **The audit — not prior expectations — determines the production retrieval source.** Choose based on what actually works cleanly with existing identifiers, evidenced by real test calls — document the evidence. If both work, prefer whichever has better data quality/ curation for a sample of genes (note this qualitatively, don't over-engineer a scoring system).
+ 
+5.If a source requires new identifier-mapping infrastructure this project doesn't have (e.g. a UniProt/Ensembl lookup step): follow the Architecture Escalation Rule above — do not add the mapping dependency yourself.
+ 
+Do not proceed to Step 2 until this is complete and documented.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 2 — PATHWAYMEMBERSHIP DATA CONTRACT `interface PathwayMembership {     pathwayId: string;              // canonical — never the pathway name     pathwayName: string;            // display label only     source: "reactome" | "wikipathways"; // per Step 1's decision     sourceUrl: string;     organism: string;     geneId: string;     geneSymbol: string;   }   ` Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 3 — NEW EXTERNAL CLIENT (only if Step 1's reuse-first audit (Steps 1.0 and 1.1) determines Gene XML is not sufficiently complete)
+ 
+If Step 1's reuse-first audit (Steps 1.0 and 1.1) confirms Gene XML provides sufficiently complete pathway cross-references, skip this step entirely and implement as a parser addition only, same as 5.6A's Gene-XML path, no new client needed.
+ 
+Otherwise, build a minimal, dedicated client for the source(s) confirmed in Step 1. Independent rate limiter scoped to this new host (not shared with the NCBI limiter — different host, different limits). Same retry/error conventions and three-tier cache separation as every prior phase. New cache namespace (e.g. `pathwaymembership:{geneId}`).
+ 
+Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 4 — RETRIEVAL AND PARSING
+ 
+Implement retrieval and parsing into `PathwayMembership[]`. Deterministic failure handling: skip malformed entries individually, preserve the rest. Never fabricate a pathway ID or name. If both Reactome and WikiPathways are used and a gene has entries from both, preserve them as separate `PathwayMembership` entries with correct `source` values — per the Non-Negotiable Constraints, do not merge or deduplicate across sources based on name similarity.
+ 
+Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 5 — COMBINED DISPLAY WITH GO (5.6A)
+ 
+Extend the existing "Biological Function" section (built in 5.6A) with a "Pathways" subsection, lazy-loaded on expand, sitting alongside the three GO aspect groups — not merged into them. Show pathway name (linked to `sourceUrl`), source attribution, with `pathwayId` available but not the primary display text. Show counts. Reuse existing card/loading/error patterns.
+ 
+Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 6 — VOLUME & GROUPING
+ 
+Do NOT build pathway hierarchy navigation. Flat, grouped-by-source list with counts. Apply the Universal Pagination Framework only if real data during testing shows a single gene's pathway count is large enough to warrant it — verify with actual numbers, don't assume.
+ 
+Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 7 — NON-HUMAN VALIDATION
+ 
+Unlike ClinVar, Reactome/WikiPathways cover model organisms natively. Confirm a non-human gene (Trp53) returns real, correctly-scoped pathway data — this must NOT default to an "unsupported" empty state the way Phase 5.5's clinical evidence did for non-human queries.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 8 — ERROR AND EMPTY STATES
+
+- 
+
+Gene with zero pathway memberships → explicit empty state, not silent.
+
+- 
+
+New host's rate limit hit → clear message, consistent with existing patterns. 
+ 
+- 
+
+Malformed source response → graceful degradation, not a crash.
+ 
+Run TypeScript.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 9 — REGRESSION VALIDATION
+
+- 
+
+Full Phase R regression unaffected.
+
+- 
+
+Gene/Transcript/Protein/Variant Explorers unaffected.
+
+- 
+
+5.6A's GO display unaffected — confirm it still renders exactly as before, only the new Pathways subsection is added alongside it.
+
+- 
+
+Confirm the new host's rate limiter is genuinely independent — no cross-throttling with the NCBI limiter (test both under simultaneous load if practical).
+
+- 
+
+TypeScript zero errors. No Python changes. No AI-generated sections modified.
+ 
+CREDIT SAFETY RULE
+ 
+If credits run low: finish the current file, run TypeScript, commit and push immediately (verify via `git ls-remote origin main`), write `PHASE-5.6B-PARTIAL-REPORT.md` with completed/remaining steps.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 
+STEP 10 — FINAL DOCUMENTATION
+ 
+Write `PHASE-5.6B-FINAL-REPORT.md`:
+
+1. Step 1's full audit findings — the Reactome vs. WikiPathways decision with evidence, and the decision-log table.
+ 
+2.Data contract field provenance.
+ 
+3.New client/rate-limiter architecture confirmation (independent from NCBI's).
+ 
+4.Regression results with actual evidence, including the rate-limiter independence check.
+ 
+5.Known limitations.
+ 
+6.Files Added / Files Modified / Public APIs Changed / Breaking Changes.
+ 
+7. Explicit statement: Phase 5.6B complete; Phase 5.6C (hardening for all of 5.6) can begin.
+ 
+STOP. Do NOT implement Phase 5.6C in this session. Do NOT build KEGG, pathway diagrams, or LLM-generated interpretation. Do NOT create a `v5.6-complete` tag. Commit and push only after TypeScript passes and Step 9's regression checks succeed. Do not commit broken code.
+ 
