@@ -10,3 +10,4 @@
 - [Resolver gene-vs-disease ranking](resolver-gene-ranking.md) — gene step now case-insensitive (digit-gated lowercase path); disease gate blocks MedGen for bare numeric gene symbols.
 - [ClinVar Variant Foundation](clinvar-variant-foundation.md) — Phase 5.5A API quirks: sort=clinical_significance is a no-op, EFetch VCV returns empty, single consequence per ESummary record, rsID uses [RS] field.
 - [GO parser large XML strategy](go-parser-large-xml.md) — Gene EFetch XML for well-studied genes can be 34MB; block-finding parsers fail silently. Use string-slice + boundary approach instead.
+- [Reactome pathway retrieval](reactome-pathway-retrieval.md) — Reactome Analysis Service POST accepts gene symbol directly; WikiPathways API is dead (404/406); NCBI ELink gives only ~7% coverage vs direct Reactome call.
