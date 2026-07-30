@@ -1,6 +1,7 @@
 {
+  "/api/clinical-evidence/route": "app/api/clinical-evidence/route.js",
   "/api/gene/go/route": "app/api/gene/go/route.js",
+  "/api/resolve-validate/route": "app/api/resolve-validate/route.js",
   "/api/gene/pathways/route": "app/api/gene/pathways/route.js",
-  "/page": "app/page.js",
-  "/results/page": "app/results/page.js"
+  "/page": "app/page.js"
 }
