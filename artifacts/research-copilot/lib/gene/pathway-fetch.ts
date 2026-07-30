@@ -150,16 +150,33 @@ async function fetchReactomePathways(
 
 // ── Response → PathwayMembership[] ───────────────────────────────────────────
 
+/**
+ * Convert Reactome API pathways to PathwayMembership[].
+ *
+ * SPECIES FILTER (Phase 5.6C hardening):
+ *   The Reactome Analysis Service POST /AnalysisService/identifiers/ endpoint
+ *   returns pathways for ALL species by default (e.g. querying "TP53" returns
+ *   both R-HSA-* human pathways and R-MMU-* mouse ortholog pathways).
+ *   We filter to only include pathways whose species.name exactly matches the
+ *   `organism` of the query gene — no cross-species leakage.
+ *   Exact case-sensitive comparison is used because Reactome species names are
+ *   always fully qualified (e.g. "Homo sapiens", "Mus musculus").
+ */
 function toPathwayMemberships(
   pathways: ReactomeAnalysisPathway[],
   geneId: string,
   geneSymbol: string,
+  organism: string,
 ): PathwayMembership[] {
   const results: PathwayMembership[] = [];
 
   for (const p of pathways) {
     // Skip malformed entries individually; preserve the rest
     if (!p.stId || !p.name || !p.species?.name) continue;
+
+    // Filter: only include pathways whose species matches the query gene's organism.
+    // Reactome returns cross-species orthologs; we retain only the relevant species.
+    if (p.species.name !== organism) continue;
 
     results.push({
       pathwayId: p.stId,
@@ -210,7 +227,7 @@ export async function getGenePathways(
     if (postWaitCached !== null) return postWaitCached;
 
     const rawPathways = await fetchReactomePathways(geneSymbol);
-    const memberships = toPathwayMemberships(rawPathways, geneId, geneSymbol);
+    const memberships = toPathwayMemberships(rawPathways, geneId, geneSymbol, organism);
     setCached(geneId, memberships);
     return memberships;
   });
