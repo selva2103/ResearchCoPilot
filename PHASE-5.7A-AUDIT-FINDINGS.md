@@ -249,3 +249,71 @@ The agent recommends approval of **Option A** to proceed, or explicit approval o
 - **No TypeScript changes**
 
 TypeScript remains at zero errors. Working tree clean (aside from .next/ build cache).
+
+---
+
+## ADDENDUM — v2 Revised Step 1 (2026-08-04)
+
+Following v2 spec revision, the UniProt ID Mapping API was approved as a legitimate
+architectural dependency. This section documents the v2 Step 1 verification results.
+
+### UniProt ID Mapping API — Live Verification
+
+**Endpoint:** `POST https://rest.uniprot.org/idmapping/run`  
+**Parameters:** `from=RefSeq_Protein`, `to=UniProtKB`  
+**Flow:** Submit → Poll status → Fetch results  
+**API license:** EBI UniProt — open, freely available.  
+**InterPro license:** EBI InterPro — open, freely available.  
+**Status:** APPROVED as architectural dependency per v2 spec.
+
+### Per-protein Mapping Results Table
+
+| Protein | Accession | # Mappings | Swiss-Prot entries | TrEMBL entries | Resolution | Selected UniProt |
+|---------|-----------|------------|---------------------|----------------|------------|-----------------|
+| TP53 (human) | NP_000537.3 | 3 | P04637 (1) | K7PPA8, Q53GA5 (2) | resolved | P04637 |
+| BRCA1 (human) | NP_009228.2 | 2 | P38398 (1) | A0A9Y1QQK3 (1) | resolved | P38398 |
+| CFTR (human) | NP_000483.3 | 1 | P13569 (1) | none | resolved | P13569 |
+| EGFR (human) | NP_005219.2 | 4 | P00533 (1) | F2YGG7, F6QWY5, Q504U8 (3) | resolved | P00533 |
+| Trp53 (mouse) | NP_035770.2 | 3 | P02340 (1) | Q3UGQ1, Q549C9 (2) | resolved | P02340 |
+
+**5/5 proteins resolved (100% — above 80% threshold). Decision: proceed with UniProt ID Mapping API.**
+
+**Multi-mapping rule applied:** Each protein mapped to multiple entries but each had exactly one 
+Swiss-Prot (reviewed) entry — rule (a) applied in all cases. Rule (b) and (c) paths were not 
+triggered by any regression-set protein; they are implemented and verifiable via code inspection.
+
+### Deterministic Multi-mapping Rule (Step 1 decision)
+
+- (a) Exactly 1 reviewed (Swiss-Prot) entry → `resolutionStatus = "resolved"`, select that entry ✓
+- (b) 2+ reviewed entries → `resolutionStatus = "ambiguous"`, `uniprotAccession = null` ✓ (implemented)
+- (c) 0 reviewed entries → `resolutionStatus = "unresolved"`, `uniprotAccession = null` ✓ (verified via XP_011520649.2)
+
+### InterPro Confirmation (with resolved UniProt accessions)
+
+| Protein | UniProt | InterPro entries | Pagination |
+|---------|---------|-----------------|------------|
+| TP53 | P04637 | 22 InterPro entries → 27 ProteinDomain objects (some have multiple fragments) | 1 page |
+| BRCA1 | P38398 | 27 InterPro entries → 48 ProteinDomain objects | 1 page |
+| CFTR | P13569 | 30+ InterPro entries → 53 ProteinDomain objects | 1 page |
+| EGFR | P00533 | 30+ InterPro entries → 57 ProteinDomain objects | 1 page |
+| Trp53 (mouse) | P02340 | 22 InterPro entries → 25 ProteinDomain objects | 1 page |
+
+All tested proteins fit within a single page at page_size=200 (`next = null`). The pagination 
+code path (`while (nextUrl)`) is implemented to handle any protein with >200 InterPro entries.
+
+**Note on domain count vs entry count:** The InterPro API returns `N` entries; each entry may have 
+multiple location fragments (e.g., discontinuous domains). Each fragment becomes a separate 
+`ProteinDomain` object per spec — no merging or truncation. This explains why domain count 
+(27 for TP53) exceeds InterPro entry count (22).
+
+### Architecture Decision (Final)
+
+**Source selected: InterPro REST API, accessed via ProteinIdentifierResolver (UniProt mapping).**
+
+Two new services built:
+1. `ProteinIdentifierResolver` — RefSeq→UniProt mapping via UniProt ID Mapping API  
+   Cache namespace: `protein-id-map:{refseqAccession}` | Rate limit: 300ms | TTL: 24h
+2. `ProteinDomainService` — InterPro REST API client  
+   Cache namespace: `proteindomain:{refseqAccession}` | Rate limit: 400ms | TTL: 24h
+
+Both services are completely independent from each other and from the NCBI client.
