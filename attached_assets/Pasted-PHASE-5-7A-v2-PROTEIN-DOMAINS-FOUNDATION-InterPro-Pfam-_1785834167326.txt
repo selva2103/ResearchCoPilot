@@ -1,0 +1,349 @@
+PHASE 5.7A (v2) — PROTEIN DOMAINS FOUNDATION
+(InterPro/Pfam Retrieval via ProteinIdentifierResolver + ProteinDomain
+Model + Display — NO structure visualization)
+
+CHANGE NOTE (read first): This is a revision of the original 5.7A
+prompt, made after a supplementary audit confirmed that InterPro does
+not accept RefSeq (NP_/XP_) accessions directly, but that an official
+UniProt/EBI RefSeq→UniProt ID Mapping API exists and is a legitimate
+architectural dependency. Only Step 1, Step 2, Step 3, and Step 6 are
+changed. Steps 0, 4, 5, 7, and 8 are unchanged from the original
+prompt and are included here for completeness, not because they
+needed revision.
+
+---
+
+PROJECT CONTEXT — READ FIRST
+
+Fetch from the remote and verify repository state before making any
+changes. Do not pull, merge, or rebase until Step 0 confirms the correct
+repository state and that v5.6-complete exists both locally and on the
+remote.
+
+Completed phases (do NOT rebuild any of these): PubMed Explorer, GEO
+Explorer, Universal Pagination, Sequence Foundation (5.1) + Gene FASTA
+download, Biological Query Resolver (Phase R), Gene Explorer (5.2),
+Transcript Explorer (5.3A/B/C), Protein Explorer Foundation (5.4A) +
+Protein Research Context (5.4B) — including FEATURES-derived role
+chips, tagged v5.4-complete — Variant Explorer + Clinical Evidence,
+tagged v5.5-complete — Biological Function Explorer (GO + Pathways),
+tagged v5.6-complete.
+
+This phase adds a dedicated, structured "Protein Domains" section —
+canonical domain accessions with position boundaries — distinct from
+5.4B's lightweight FEATURES-derived role chips (unchanged, not
+modified by this phase). Scoped as 5.7A (Foundation) → 5.7B
+(Hardening). Do NOT create a v5.7-complete tag in this session.
+
+---
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint before making any change.
+2. Run TypeScript after each step. Fix regressions immediately.
+3. Never commit code that does not compile.
+4. Push after each logical milestone, verified via
+   git ls-remote origin main. If authentication fails: keep local
+   commits, report honestly, retry once after Step 8.
+
+Architecture Freeze Rule: Adapt implementation details only where
+audit findings require it — do not redesign ProteinRecord,
+ProteinResearchContext, or existing role-chip extraction.
+
+Immutability Rule: ProteinRecord, ProteinResearchContext, and
+everything before this phase are frozen. This phase adds ProteinDomain
+and ProteinIdentifierResolver alongside them without modifying
+existing role-chip extraction or GenPept parsing.
+
+Public Contract Stability: Do not rename or reshape any existing
+exported type.
+
+Documentation Freeze: Create/update only PHASE-5.7A-AUDIT-FINDINGS.md
+(append, do not overwrite the existing content) and
+PHASE-5.7A-FINAL-REPORT.md.
+
+New Component Provisional Status (important — new in v2):
+`ProteinIdentifierResolver` is being built as a reusable service
+because future phases (5.8 AlphaFold, 5.9 Protein Interactions, and
+others) will likely need RefSeq→UniProt resolution. However, it is
+NOT part of Frozen Architecture as of this phase. It has exactly one
+consumer (InterPro) in 5.7A. Do not add it to the Frozen Architecture
+list in this phase's documentation. Freeze eligibility will be
+reassessed once a second consumer (e.g. Phase 5.8) has validated the
+interface. Until then, treat its public shape as stable-but-revisable.
+
+---
+
+NON-NEGOTIABLE ARCHITECTURAL CONSTRAINTS
+
+domainId is the canonical identifier everywhere internally (Pfam
+PF00870 or InterPro IPR002117) — domainName is display-only, never
+used as a key.
+
+uniprotAccession, once resolved, is treated as canonical for the
+lifetime of the mapping — never re-derived ad hoc elsewhere in the
+codebase. All future InterPro (and later AlphaFold/STRING/etc.) calls
+must go through ProteinIdentifierResolver, not re-implement mapping.
+
+ProteinRecord continues to use the RefSeq accession as the project's
+canonical protein identifier, exactly as in all prior phases. UniProt
+is an external interoperability identifier only, used solely to query
+UniProt-dependent external services — it never replaces RefSeq as the
+internal key, in caches, in URLs, or in any cross-phase reference.
+
+Never fabricate a domain, accession, position range, or UniProt
+mapping — if a source doesn't provide it, the field is null, not
+estimated or guessed.
+
+No structure/3D visualization — that's Phase 5.8.
+
+No LLM-generated interpretation of domain function.
+
+InterPro and the UniProt ID Mapping API are both open EBI services —
+confirm current terms for both during Step 1 regardless.
+
+Both new external dependencies (UniProt ID Mapping, InterPro) get
+their own independent HTTP client, rate limiter, and cache namespace
+— same isolation pattern as 5.6B's Reactome/WikiPathways clients, kept
+separate from each other and from the NCBI client.
+
+Do NOT modify or merge with 5.4B's existing Region:/Site: role chips.
+
+---
+
+STEP 0 — BASELINE VERIFICATION (unchanged)
+
+git status
+git branch -vv
+git log -1 --oneline
+git tag -l "v5.6-complete"
+git ls-remote --tags origin v5.6-complete
+
+Confirm: clean working tree; branch main; upstream tracking
+origin/main; v5.6-complete exists locally and remotely; TypeScript
+passes; Protein Explorer opens successfully for TP53 before beginning.
+
+---
+
+STEP 1 — MANDATORY AUDIT (REVISED)
+
+Write findings as an appended section in PHASE-5.7A-AUDIT-FINDINGS.md
+(the existing audit content stays; add to it, do not replace it).
+
+1. Confirm (already established, re-verify live): InterPro does not
+   accept RefSeq protein accessions directly.
+
+2. Verify the official UniProt ID Mapping API
+   (RefSeq_Protein → UniProtKB) live, using this project's actual
+   regression-set accessions: TP53 (NP_000537.3), BRCA1's accession,
+   CFTR's accession, EGFR's accession, and mouse Trp53's accession.
+   For each, record:
+   - mapping success or failure
+   - if successful, the number of UniProt entries returned
+   - whether any returned entry is marked reviewed (Swiss-Prot) vs.
+     unreviewed (TrEMBL)
+   Do not just confirm the mechanism works in general — confirm it
+   works (or document that it doesn't) for these five specific
+   proteins, since BRCA1 is already known from the prior audit to lack
+   a usable UniProt cross-reference inside GenPept, and this project's
+   own regression suite depends on it.
+
+3. Revised decision rule: Adopt the UniProt ID Mapping API as an
+   approved architectural dependency if it successfully maps at least
+   80% of the current regression set (today: 4 of 5 proteins; this
+   threshold scales automatically as the regression set grows in
+   later phases — do not re-hardcode a raw count). Continue directly
+   to Step 2 in that case — do not stop merely because direct NP_
+   lookup against InterPro is unsupported; that was already expected.
+   Only stop and escalate (per Architecture Escalation Rule) if
+   mapping falls below that 80% threshold, or if licensing terms
+   prevent use. Isolated, below-threshold failures within an otherwise
+   passing set are not grounds to escalate — they are handled through
+   the deterministic empty states defined in Step 6, not through
+   blocking the phase.
+
+4. Deterministic multi-mapping rule (decide now, not later): if a
+   RefSeq accession maps to multiple UniProt entries, select in this
+   order: (a) a reviewed (Swiss-Prot) entry if exactly one exists;
+   (b) if multiple reviewed entries exist, select none automatically —
+   treat as unresolved and surface the "identifier could not be
+   deterministically resolved" state (Step 6); (c) if zero reviewed
+   entries exist, select none automatically — same unresolved state.
+   Never silently pick "the first result."
+
+5. Confirm the InterPro query itself works given a resolved UniProt
+   accession, using the same test proteins, and record pagination
+   behavior (page size, total pages) as in the original prompt.
+
+Do not proceed to Step 2 until this is complete and documented,
+including the per-protein mapping results table.
+
+---
+
+STEP 2 — DATA CONTRACTS (REVISED)
+
+interface ProteinIdentifierMapping {
+  refseqAccession: string;
+  uniprotAccession: string | null;   // null if unresolved
+  reviewed: boolean | null;          // null if unresolved
+  resolutionStatus: "resolved" | "unresolved" | "ambiguous";
+  source: "uniprot-id-mapping";
+}
+
+interface ProteinDomain {
+  domainId: string;              // canonical — e.g. "PF00870" or "IPR002117"
+  domainName: string;            // display label only
+  source: "genpept-features" | "interpro";
+  startPosition: number | null;
+  endPosition: number | null;
+  proteinAccession: string;      // RefSeq accession (project's canonical key)
+  uniprotAccession: string;      // resolved UniProt accession used for lookup
+  geneId: string;
+  organism: string;
+}
+
+Run TypeScript.
+
+---
+
+STEP 3 — RETRIEVAL SERVICES (REVISED)
+
+Build two independent services:
+
+A. ProteinIdentifierResolver
+   - Input: RefSeq protein accession.
+   - Calls the UniProt ID Mapping API (async job: submit → poll →
+     retrieve), applying Step 1's deterministic multi-mapping rule.
+   - Polling must use the project's existing retry/backoff policy (the
+     same pattern already established for other async or rate-limited
+     calls in this codebase). If the mapping job does not complete
+     within that policy's bounds, return an explicit temporary-failure
+     result — never poll indefinitely, and never treat a timeout as a
+     confirmed "unresolved" mapping (a timeout is retryable; an actual
+     empty mapping result is not).
+   - Own HTTP client, own rate limiter, own cache namespace:
+     protein-id-map:{refseqAccession}
+   - Cache the full ProteinIdentifierMapping result, including
+     unresolved/ambiguous outcomes (so repeated lookups for a
+     known-unresolvable protein don't re-hit the API every time).
+     Use the project's existing cache TTL policy for this namespace
+     unless a TTL is already established specifically for UniProt or
+     InterPro data — do not invent a new cache lifetime for this
+     phase.
+   - Public method returns the full ProteinIdentifierMapping shape,
+     not just a bare string, so downstream consumers (this phase and
+     future ones) have resolution status and reviewed/ambiguous
+     context available without re-deriving it.
+
+B. ProteinDomainService (InterPro client)
+   - Consumes ProteinIdentifierResolver's output — never calls UniProt
+     mapping itself.
+   - Own HTTP client, own rate limiter, own cache namespace:
+     proteindomain:{proteinAccession}, using the same existing cache
+     TTL policy referenced above.
+   - If pagination applies, retrieve all pages before normalization.
+     Document observed pagination in the audit findings.
+
+Run TypeScript.
+
+---
+
+STEP 4 — PARSING AND NORMALIZATION (unchanged)
+
+Do not deduplicate by domainId, domainName, or position range unless
+the source explicitly returns duplicate records with identical
+accession, coordinates, and source. Map source data into
+ProteinDomain[]. Skip malformed entries individually, preserve the
+rest. Never fabricate positions — leave null rather than guessing.
+
+Run TypeScript.
+
+---
+
+STEP 5 — DISPLAY (unchanged)
+
+Add a "Protein Domains" section to the Protein Explorer UI
+(lazy-loaded on expand), positioned near but visually distinct from
+existing role chips. Show domain name (linked to source if
+available), accession (secondary), and position range if known.
+
+Do not reorder or relocate existing Protein Explorer sections.
+
+Deterministic ordering: sort by startPosition ascending, then
+domainName as tiebreaker; null positions last.
+
+Run TypeScript.
+
+---
+
+STEP 6 — ERROR AND EMPTY STATES (REVISED)
+
+Two distinct, user-visible empty states are required — these are
+biologically and technically different situations and must not be
+collapsed into one generic message:
+
+- Case A — identifier could not be resolved: RefSeq → UniProt mapping
+  failed or was ambiguous (per Step 1's rule). Display: "Protein
+  identifier could not be resolved." Do not attempt InterPro lookup
+  in this case.
+
+- Case B — resolved but no domains: UniProt mapping succeeded,
+  InterPro returned zero domain annotations. Display: "No annotated
+  domains available for this protein."
+
+Additional cases:
+- Non-human protein → confirm domain data actually returns.
+- Malformed/partial source response (from either service) → graceful
+  degradation, not a crash.
+- Overlapping domains from different member databases → confirm all
+  are displayed independently. Do NOT merge, truncate, or deduplicate.
+
+Run TypeScript.
+
+---
+
+STEP 7 — REGRESSION VALIDATION (unchanged)
+
+Confirm Protein Explorer still renders successfully for TP53, BRCA1,
+CFTR, EGFR, and Trp53 (mouse) after the Protein Domains section is
+added — including confirming which empty-state (if any) each one
+correctly hits, consistent with Step 1's findings.
+
+Full Phase R regression unaffected. Gene/Transcript/Protein/Variant
+Explorers and Biological Function Explorer unaffected. 5.4B's role
+chips render exactly as before. Gene/Transcript/CDS/Protein FASTA
+downloads unchanged.
+
+TypeScript zero errors. No Python changes. No AI-generated sections
+modified.
+
+---
+
+CREDIT SAFETY RULE (unchanged)
+
+If credits run low: finish the current file, run TypeScript, commit
+and push immediately, write PHASE-5.7A-PARTIAL-REPORT.md with
+completed/remaining steps.
+
+---
+
+STEP 8 — FINAL DOCUMENTATION (REVISED)
+
+Write PHASE-5.7A-FINAL-REPORT.md including everything from the
+original prompt's Step 8, plus:
+
+9. ProteinIdentifierResolver's public interface, its cache namespace,
+   and an explicit note that it is provisionally reusable but NOT yet
+   part of Frozen Architecture — freeze eligibility to be reassessed
+   after Phase 5.8 validates it as a second consumer.
+10. The per-protein mapping results table from Step 1 (success,
+    ambiguous, or unresolved, with reviewed/unreviewed counts).
+11. Explicit confirmation of which empty state (Case A or Case B) each
+    regression-set protein hit, if any.
+
+STOP. Do NOT implement Phase 5.7B or Phase 5.8 in this session. Do NOT
+build structure visualization, LLM-generated interpretation, or modify
+5.4B's existing role chips. Do NOT create a v5.7-complete tag. Do NOT
+add ProteinIdentifierResolver to the Frozen Architecture list.
+Commit and push only after TypeScript passes and Step 7's regression
+checks succeed. Do not commit broken code.

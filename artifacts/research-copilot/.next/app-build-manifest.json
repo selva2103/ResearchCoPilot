@@ -55,6 +55,21 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/gene/pathways/route.js"
+    ],
+    "/api/protein/domains/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/protein/domains/route.js"
+    ],
+    "/api/protein/download/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/protein/download/route.js"
+    ],
+    "/api/gene/fasta/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/gene/fasta/route.js"
     ]
   }
 }
