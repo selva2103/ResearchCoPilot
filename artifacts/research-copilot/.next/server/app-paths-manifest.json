@@ -1,7 +1,10 @@
 {
-  "/api/clinical-evidence/route": "app/api/clinical-evidence/route.js",
-  "/api/gene/go/route": "app/api/gene/go/route.js",
-  "/api/resolve-validate/route": "app/api/resolve-validate/route.js",
+  "/api/protein/summaries/route": "app/api/protein/summaries/route.js",
+  "/api/transcript/summary/route": "app/api/transcript/summary/route.js",
+  "/api/protein/detail/route": "app/api/protein/detail/route.js",
+  "/api/protein/research-context/route": "app/api/protein/research-context/route.js",
   "/api/gene/pathways/route": "app/api/gene/pathways/route.js",
-  "/page": "app/page.js"
+  "/api/gene/go/route": "app/api/gene/go/route.js",
+  "/page": "app/page.js",
+  "/results/page": "app/results/page.js"
 }

@@ -1,0 +1,385 @@
+PHASE 5.7A — PROTEIN DOMAINS FOUNDATION
+(InterPro/Pfam Retrieval + ProteinDomain Model + Display — NO structure
+visualization)
+
+PROJECT CONTEXT — READ FIRST
+
+Fetch from the remote and verify repository state before making any
+changes. Do not pull, merge, or rebase until Step 0 confirms the correct
+repository state and that v5.6-complete exists both locally and on the
+remote.
+
+Completed phases (do NOT rebuild any of these):
+
+PubMed Explorer, GEO Explorer, Universal Pagination, Sequence
+Foundation (5.1) + Gene FASTA download
+
+Biological Query Resolver (Phase R)
+
+Gene Explorer (5.2), Transcript Explorer (5.3A/B/C)
+
+Protein Explorer Foundation (5.4A) + Protein Research Context (5.4B)
+— including the FEATURES-derived role chips (Region:/Site: chips
+extracted from GenPept) — tagged v5.4-complete
+
+Variant Explorer + Clinical Evidence + VariantResearchContext —
+tagged v5.5-complete
+
+Biological Function Explorer (GO Foundation + Pathway Integration) —
+tagged v5.6-complete
+
+
+This phase adds a dedicated, structured "Protein Domains" section —
+canonical domain accessions with position boundaries — distinct from
+5.4B's lightweight FEATURES-derived role chips (which stay exactly as
+they are; this phase does not modify or replace them). Architecture
+note: unlike prior phases, Protein Domains has no natural second
+"enrichment layer" the way Pathways was distinct from GO — this phase is
+scoped as 5.7A (Foundation) → 5.7B (Hardening), two phases, not three.
+Do NOT create a v5.7-complete tag in this session — that only happens
+after 5.7B is also complete.
+
+
+---
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint before making any change.
+
+
+2. Run TypeScript after each step. Fix regressions immediately.
+
+
+3. Never commit code that does not compile.
+
+
+4. Push after each logical milestone (end of each numbered step, not
+just once at the end), verified via git ls-remote origin main. If
+authentication fails: keep local commits, report the failure
+honestly, retry exactly once after Step 8 — do not spam repeated
+auth prompts by retrying after every single step.
+
+
+
+Architecture Freeze Rule: Adapt implementation details only where
+repository structure or Step 1's audit requires it — do not redesign
+ProteinRecord, ProteinResearchContext, or the existing role-chip
+extraction.
+
+Architecture Escalation Rule: If Step 1's audit reveals a genuine
+structural incompatibility (e.g. InterPro requiring an identifier this
+project doesn't have) — STOP, document it in
+PHASE-5.7A-AUDIT-FINDINGS.md, and wait for review.
+
+Immutability Rule: ProteinRecord, ProteinResearchContext, and
+everything before this phase are frozen. This phase adds ProteinDomain
+alongside them without modifying existing role-chip extraction or
+GenPept parsing, unless a genuine bug is proven.
+
+Public Contract Stability: Do not rename or reshape any existing
+exported type.
+
+Documentation Freeze: Create/update only PHASE-5.7A-AUDIT-FINDINGS.md
+and PHASE-5.7A-FINAL-REPORT.md.
+
+Hardening Scope discipline carries the opposite direction here: this
+IS an implementation phase (not 5.7B's hardening), so new functionality
+is expected — but stay strictly within domain-listing scope (Section
+below) and do not drift into structure visualization, which is 5.8's job.
+
+
+---
+
+NON-NEGOTIABLE ARCHITECTURAL CONSTRAINTS
+
+domainId is the canonical identifier everywhere internally (e.g.
+Pfam PF00870 or InterPro IPR002117) — domainName is display-only,
+never used as a key. Same discipline as GeneID, transcript accessions,
+ClinVar VCV IDs, GO IDs, and pathway IDs throughout this project.
+
+Never fabricate a domain, accession, or position range — if the
+source doesn't provide exact boundaries, startPosition/endPosition
+are null, not estimated.
+
+No structure/3D visualization of any kind — that's Phase 5.8. This
+phase lists domains (name, accession, position, source), nothing more.
+
+No LLM-generated interpretation of domain function.
+
+InterPro and Pfam are both freely available under open licensing (EBI)
+— unlike KEGG, there is no licensing exclusion concern here, but
+confirm current terms during Step 1 regardless, since terms can change.
+
+If a new external host is required (InterPro/Pfam are not NCBI
+Entrez family), build a new, minimal, dedicated client with its own
+independent rate limiter — same pattern established in 5.6B, do not
+force it through the NCBI-specific client.
+
+Do NOT modify or merge with 5.4B's existing Region:/Site: role
+chips — this phase's domain data is additive and structurally
+separate, even though there may be conceptual overlap.
+
+
+
+---
+
+STEP 0 — BASELINE VERIFICATION
+
+git status  
+git branch -vv  
+git log -1 --oneline  
+git tag -l "v5.6-complete"  
+git ls-remote --tags origin v5.6-complete
+
+Confirm explicitly, before proceeding: clean working tree; current
+branch is main; upstream branch is correctly tracking origin/main;
+v5.6-complete exists locally; v5.6-complete exists on the remote;
+TypeScript passes.
+
+Also confirm the existing Protein Explorer opens successfully for at
+least one known protein (e.g. TP53) before beginning implementation —
+this catches any pre-existing regression before new work starts.
+
+
+---
+
+STEP 1 — MANDATORY AUDIT: REUSE-FIRST, THEN SOURCE SELECTION
+
+Do this before writing any implementation code. Write findings to
+PHASE-5.7A-AUDIT-FINDINGS.md, including a decision-log table.
+
+1. Reuse-first check: Inspect whether the GenPept FEATURES data
+already fetched for 5.4B's role chips (Region:/Site: extraction)
+includes position/coordinate information (GenBank feature table
+entries always carry a location range) and whether these regions
+already correspond to recognizable domain families. Compare a
+representative protein (e.g. NP_000537.3 / TP53) against InterPro's
+own listing for the same protein — same "presence vs. completeness"
+comparison discipline used in 5.6A.
+
+
+2. Decision rule (strict): reuse GenPept FEATURES only if they
+provide canonical, stable, accession-bearing domain identifiers
+(e.g. an actual Pfam/InterPro ID, not just a free-text region name)
+together with reliable residue boundaries. Free-text region names
+without a real accession do NOT qualify, even if they look
+domain-like — in practice GenPept FEATURES rarely carry canonical
+domain IDs, so expect InterPro to be the likely outcome unless proven
+otherwise. If FEATURES don't meet this bar, use InterPro's REST API
+(which aggregates Pfam, PROSITE, SMART, and others under one
+canonical accession system — prefer InterPro over calling Pfam
+directly, since InterPro's own accessions are the more stable
+canonical layer).
+
+
+3. Confirm InterPro's API can be queried using data already available
+(protein accession — NP_/XP_ — is the natural key; confirm this
+works directly without requiring UniProt mapping, unlike Reactome's
+situation in 5.6B). Confirm this using live requests rather than
+relying solely on documentation. Record the exact tested RefSeq
+accession(s) and the observed response (status, key fields returned)
+in PHASE-5.7A-AUDIT-FINDINGS.md. If direct RefSeq protein accession
+support is NOT available and an additional accession-mapping layer
+(e.g. UniProt mapping) would be required to use InterPro: STOP and
+document the incompatibility in PHASE-5.7A-AUDIT-FINDINGS.md instead
+of introducing new mapping infrastructure without approval — this is
+an Architecture Escalation Rule case, identical in kind to 5.6B's
+Reactome/UniProt situation.
+
+
+4. Confirm non-human protein coverage (test with a mouse protein, e.g.
+TP53's mouse ortholog's protein accession) — domain data is sequence-
+based, not species-restricted, so this should work natively; confirm
+it does.
+
+
+5. Document the final decision with comparative evidence.
+
+
+
+Do not proceed to Step 2 until this is complete and documented.
+
+
+---
+
+STEP 2 — PROTEINDOMAIN DATA CONTRACT
+
+interface ProteinDomain {  
+  domainId: string;              // canonical — e.g. "PF00870" or "IPR002117"  
+  domainName: string;            // display label only  
+  source: "genpept-features" | "interpro"; // per Step 1's decision  
+  startPosition: number | null;  // residue position on the protein  
+  endPosition: number | null;  
+  proteinAccession: string;  
+  geneId: string;  
+  organism: string;  
+}
+
+Run TypeScript.
+
+
+---
+
+STEP 3 — RETRIEVAL SERVICE
+
+Implement per Step 1's decision:
+
+If GenPept FEATURES: parser addition only, reusing 5.4B's existing
+GenPept fetch (no new NCBI call).
+
+If InterPro: new minimal client, completely independent: HTTP
+client, rate limiter, and cache namespace (mirroring exactly how
+5.6B's Reactome/WikiPathways client was isolated from the NCBI
+client) — new cache namespace (e.g. proteindomain:{proteinAccession}),
+same three-tier cache separation. Cache keys MUST be based on
+proteinAccession only — do not cache by protein name, gene symbol, or
+domain name. If the selected InterPro endpoint paginates results,
+retrieve all pages before normalization — do not silently truncate
+the domain list to a single page. Document the observed pagination
+behavior (page size, total pages for a test protein) in the audit
+findings.
+
+
+Run TypeScript.
+
+
+---
+
+STEP 4 — PARSING AND NORMALIZATION
+
+Do not deduplicate by domainId, domainName, or position range unless the
+source explicitly returns duplicate records with the same accession,
+coordinates, and source. Distinct signatures from different member
+databases are biologically valid and must be preserved.
+
+Map source data into ProteinDomain[]. Deterministic failure handling:
+skip malformed entries individually, preserve the rest. Never fabricate
+positions when a source provides a name but no coordinates — leave them
+null rather than guessing.
+
+Run TypeScript.
+
+
+---
+
+STEP 5 — DISPLAY
+
+Add a "Protein Domains" section to the Protein Explorer UI (lazy-loaded
+on expand, reusing existing card/loading/error patterns), positioned
+near but visually distinct from the existing role chips — do not merge
+them. Show domain name (linked to source if available), accession
+(secondary, not primary display text), and position range if known
+(e.g. "residues 94–312").
+
+Do not reorder or relocate existing Protein Explorer sections. Insert
+"Protein Domains" as an additive section only — existing Protein
+Overview, Protein Research Context, and role-chip sections must
+retain their relative order.
+
+Deterministic ordering (required): sort domains by startPosition
+ascending, then domainName as a tiebreaker; entries with unknown
+(null) positions appear last. This must be deterministic regardless
+of the order the source API returns them in.
+
+Run TypeScript.
+
+
+---
+
+STEP 6 — ERROR AND EMPTY STATES
+
+Protein with no identifiable domains → explicit empty state.
+
+Non-human protein → confirm domain data actually returns (not an
+"unsupported" default).
+
+Malformed/partial source response → graceful degradation, not a crash.
+
+Protein with overlapping domains (InterPro commonly returns
+overlapping signatures from different member databases) → confirm all
+overlapping domains are displayed independently. Do NOT merge,
+truncate, or deduplicate overlapping domains — each is a distinct,
+valid annotation even if their position ranges overlap.
+
+
+Run TypeScript.
+
+
+---
+
+STEP 7 — REGRESSION VALIDATION
+
+Confirm Protein Explorer still renders successfully for TP53, BRCA1,
+CFTR, EGFR, and a non-human protein (Trp53) after the Protein Domains
+section is added.
+
+Full Phase R regression unaffected.
+
+Gene/Transcript/Protein/Variant Explorers and the Biological Function
+Explorer (5.6) unaffected.
+
+Confirm 5.4B's existing role chips render exactly as before —
+untouched by this phase's additions.
+
+Confirm unchanged: Gene FASTA download, Transcript FASTA/CDS
+download, Protein FASTA download — these are now stable, established
+features and must be explicitly protected in every future phase's
+regression check.
+
+TypeScript zero errors. No Python changes. No AI-generated sections
+modified.
+
+
+
+---
+
+CREDIT SAFETY RULE
+
+If credits run low: finish the current file, run TypeScript, commit and
+push immediately (verify via git ls-remote origin main), write
+PHASE-5.7A-PARTIAL-REPORT.md with completed/remaining steps.
+
+
+---
+
+STEP 8 — FINAL DOCUMENTATION
+
+Write PHASE-5.7A-FINAL-REPORT.md:
+
+1. Step 1's full audit findings and decision-log table.
+
+
+2. Justification for the final source decision (GenPept FEATURES vs.
+InterPro) — the specific evidence from Step 1 that drove the choice,
+written concretely enough to be useful as a reference months later.
+
+
+3. Data contract field provenance.
+
+
+4. Retrieval/cache architecture confirmation (isolation from NCBI
+client, per Step 3), including pagination handling if applicable.
+
+
+5. Regression results with actual evidence, including the download
+regression checks (Gene/Transcript/Protein FASTA) and the
+overlapping-domains test case.
+
+
+6. Known limitations.
+
+
+7. Files Added / Files Modified / Public APIs Changed / Breaking Changes.
+
+
+8. Explicit handoff scope for Phase 5.7B (hardening): what needs
+validating across the full domain-listing feature.
+
+
+
+STOP. Do NOT implement Phase 5.7B or Phase 5.8 in this session. Do NOT
+build structure visualization, LLM-generated interpretation, or modify
+5.4B's existing role chips. Do NOT create a v5.7-complete tag.
+Commit and push only after TypeScript passes and Step 7's regression
+checks succeed.
+Do not commit broken code.
