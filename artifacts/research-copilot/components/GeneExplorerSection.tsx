@@ -37,6 +37,7 @@ import type { TranscriptRecord } from "@/types/transcript-record";
 import type { ProteinRecord } from "@/types/protein-record";
 import type { NormalizedQuery } from "@/types/normalized-query";
 import type { ProteinResearchContext } from "@/types/research-context";
+import type { ProteinDomain } from "@/types/protein-domain";
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
@@ -946,6 +947,34 @@ function TranscriptRow({
  *       → collapsed sub-accordion showing accession, status, length, canonical badge
  *       → on expand: fetch detail (proteinName, molecularWeight) + Download FASTA button
  */
+/**
+ * Returns a canonical InterPro URL for a domain accession, or null if unknown.
+ * Used to link domain names in the Protein Domains panel (Phase 5.7A).
+ * Pattern: accession prefix → InterPro database path segment.
+ */
+function domainSourceUrl(domainId: string): string | null {
+  if (domainId.startsWith("IPR")) {
+    return `https://www.ebi.ac.uk/interpro/entry/interpro/${domainId}/`;
+  }
+  if (domainId.startsWith("PF")) {
+    return `https://www.ebi.ac.uk/interpro/entry/pfam/${domainId}/`;
+  }
+  if (domainId.startsWith("PS")) {
+    return `https://www.ebi.ac.uk/interpro/entry/prosite/${domainId}/`;
+  }
+  if (domainId.startsWith("PR")) {
+    return `https://www.ebi.ac.uk/interpro/entry/prints/${domainId}/`;
+  }
+  if (domainId.startsWith("PTHR")) {
+    return `https://www.ebi.ac.uk/interpro/entry/panther/${domainId}/`;
+  }
+  if (domainId.startsWith("SM")) {
+    return `https://www.ebi.ac.uk/interpro/entry/smart/${domainId}/`;
+  }
+  // CDD (cd...), SSF, CATH (G3DSA:...) — no stable deep-link available
+  return null;
+}
+
 function ProteinPanel({
   transcript,
   isCoding,
@@ -982,6 +1011,16 @@ function ProteinPanel({
   // Guards against a stale response overwriting a newer one when the user
   // rapidly expands/collapses different transcripts' protein panels.
   const rcRequestAccessionRef = useRef<string | null>(null);
+
+  // ── Protein Domains (Phase 5.7A) — lazy, collapsed by default ──────────────
+  const [domainsExpanded, setDomainsExpanded] = useState(false);
+  const [domains, setDomains] = useState<ProteinDomain[] | null>(null);
+  const [domainsLoading, setDomainsLoading] = useState(false);
+  const [domainsError, setDomainsError] = useState<string | null>(null);
+  const [domainsResolutionStatus, setDomainsResolutionStatus] = useState<
+    "resolved" | "unresolved" | "ambiguous" | null
+  >(null);
+  const domainsFetchedRef = useRef(false);
 
   const handleResearchContextToggle = async () => {
     const opening = !rcExpanded;
@@ -1048,6 +1087,48 @@ function ProteinPanel({
         setDetailError("Network error — protein detail unavailable.");
       } finally {
         setDetailLoading(false);
+      }
+    }
+  };
+
+  const handleDomainsToggle = async () => {
+    const opening = !domainsExpanded;
+    setDomainsExpanded((v) => !v);
+    if (opening && !domainsFetchedRef.current && proteinRecord) {
+      domainsFetchedRef.current = true;
+      setDomainsLoading(true);
+      setDomainsError(null);
+      try {
+        const res = await fetch("/api/protein/domains", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accession: proteinRecord.proteinAccessionVersion,
+            geneId: proteinRecord.geneId,
+            organism: proteinRecord.organism,
+          }),
+        });
+        const result = await res.json() as {
+          status: string;
+          domains?: ProteinDomain[];
+          resolutionStatus?: "resolved" | "unresolved" | "ambiguous";
+          error?: { message: string };
+          rateLimited?: boolean;
+        };
+        if (result.status === "error" || res.status >= 400) {
+          setDomainsError(
+            result.rateLimited
+              ? "Rate limit hit — please try again in a moment."
+              : result.error?.message ?? "Domain data unavailable."
+          );
+        } else {
+          setDomainsResolutionStatus(result.resolutionStatus ?? null);
+          setDomains(result.domains ?? []);
+        }
+      } catch {
+        setDomainsError("Network error — domain data unavailable.");
+      } finally {
+        setDomainsLoading(false);
       }
     }
   };
@@ -1321,6 +1402,102 @@ function ProteinPanel({
                             {rcContext.relationships.species}
                           </p>
                         </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Protein Domains (Phase 5.7A) — expandable, visually distinct from role chips ── */}
+              <div className="rounded-md bg-slate-50 dark:bg-slate-900/40 border border-teal-200 dark:border-teal-800/60 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={handleDomainsToggle}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left hover:bg-teal-50 dark:hover:bg-teal-900/20 transition-colors"
+                >
+                  <span className="text-[11px] font-semibold text-teal-700 dark:text-teal-400 uppercase tracking-wide">
+                    🧩 Protein Domains
+                  </span>
+                  <span className="ml-auto text-slate-400 dark:text-slate-500 text-[11px]">
+                    {domainsExpanded ? "▲" : "▼"}
+                  </span>
+                </button>
+
+                {domainsExpanded && (
+                  <div className="px-2 pb-2 pt-0.5 border-t border-teal-200 dark:border-teal-800/60 space-y-2">
+                    {domainsLoading && (
+                      <div className="flex items-center gap-1.5">
+                        <LoadingSpinner />
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          Loading domain annotations…
+                        </span>
+                      </div>
+                    )}
+
+                    {!domainsLoading && domainsError && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 italic">
+                        ⚠️ {domainsError}
+                      </p>
+                    )}
+
+                    {!domainsLoading && !domainsError && domains !== null && (
+                      <>
+                        {/* Case A — identifier could not be resolved */}
+                        {domainsResolutionStatus !== "resolved" && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            Protein identifier could not be resolved.
+                          </p>
+                        )}
+
+                        {/* Case B — resolved but no domains annotated */}
+                        {domainsResolutionStatus === "resolved" && domains.length === 0 && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            No annotated domains available for this protein.
+                          </p>
+                        )}
+
+                        {/* Success — domain list */}
+                        {domainsResolutionStatus === "resolved" && domains.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                              {domains.length} domain{domains.length !== 1 ? "s" : ""} from InterPro
+                            </p>
+                            <div className="space-y-1">
+                              {domains.map((domain, i) => (
+                                <div
+                                  key={`${domain.domainId}-${domain.startPosition ?? "null"}-${i}`}
+                                  className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 py-0.5"
+                                >
+                                  {/* Domain name — linked to InterPro if accession is IPR/PF */}
+                                  {domainSourceUrl(domain.domainId) ? (
+                                    <a
+                                      href={domainSourceUrl(domain.domainId)!}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-xs text-teal-700 dark:text-teal-400 hover:underline font-medium"
+                                    >
+                                      {domain.domainName}
+                                    </a>
+                                  ) : (
+                                    <span className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                                      {domain.domainName}
+                                    </span>
+                                  )}
+                                  {/* Canonical accession — secondary */}
+                                  <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500">
+                                    {domain.domainId}
+                                  </span>
+                                  {/* Position range — shown when available */}
+                                  {domain.startPosition !== null && domain.endPosition !== null && (
+                                    <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                      residues {domain.startPosition}–{domain.endPosition}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
