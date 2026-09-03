@@ -1,0 +1,44 @@
+We have an environment/dependency setup problem in this imported ResearchCoPilot repository. Diagnose and fix ONLY this environment issue; do not modify application architecture or implement Phase 5.7B yet.
+
+Current facts already verified:
+- Git is correct: local main == origin/main at commit 0dcf43f3cf0cbd3b97ddf9b179dfec8306736008.
+- Working tree is clean.
+- 5.7A files are present:
+  - artifacts/research-copilot/lib/protein/identifier-resolver.ts
+  - artifacts/research-copilot/lib/protein/domain-fetch.ts
+- Repository uses pnpm workspaces and pnpm-lock.yaml.
+- pnpm version: 10.26.1.
+- Node version: 20.20.0.
+- `pnpm install --frozen-lockfile` fails only when fetching:
+  orval@8.9.1
+  via:
+  http://package-firewall.replit.local/npm/orval/-/orval-8.9.1.tgz
+  with HTTP 403 / "No authorization header was set".
+- `orval` is genuinely required by `lib/api-spec/package.json` as `^8.9.1`.
+- The lockfile is up to date and MUST NOT be regenerated or changed.
+- `pnpm run typecheck` currently fails with `tsc: not found` because dependency installation is incomplete.
+- `.npmrc` contains only:
+  auto-install-peers=false
+  strict-peer-dependencies=false
+- `.replit` currently specifies:
+  modules = ["nodejs-20", "web", "python-3.11"]
+- The lockfile records orval@8.9.1 with engines node >=22.18.0.
+
+IMPORTANT:
+1. Diagnose the Replit environment/package-firewall problem rather than guessing.
+2. Use the repository's existing package manager and frozen lockfile.
+3. Do NOT remove/downgrade/replace orval.
+4. Do NOT run `pnpm update`, `pnpm add`, `npm install`, or regenerate pnpm-lock.yaml.
+5. Do NOT redesign or modify ResearchCoPilot application code.
+6. Do NOT implement Phase 5.7B.
+7. Do NOT disable security/package-firewall protections or add fake credentials/tokens.
+8. If the Node 20 environment is incompatible with the existing locked dependency tree, make the smallest Replit environment configuration change necessary to use the compatible Node version, but only if supported by this repository/Replit environment.
+9. If the 403 is a Replit package-firewall/platform issue rather than a repository issue, diagnose that explicitly and use the safest supported Replit solution.
+10. Minimize credit usage: inspect only the relevant configuration/dependency files, make the smallest fix, then stop.
+
+SUCCESS CRITERIA:
+- `pnpm install --frozen-lockfile` succeeds.
+- `pnpm run typecheck` succeeds with zero TypeScript errors.
+- `pnpm-lock.yaml` is unchanged.
+- No ResearchCoPilot application architecture/code is changed.
+- Report exactly what caused the problem, what you changed, and the verification results.
