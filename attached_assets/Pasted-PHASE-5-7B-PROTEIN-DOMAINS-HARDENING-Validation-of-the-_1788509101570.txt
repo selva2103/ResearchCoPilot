@@ -1,0 +1,249 @@
+PHASE 5.7B — PROTEIN DOMAINS HARDENING
+(Validation of the 5.7A architecture as actually implemented — no new
+functionality)
+
+PROJECT CONTEXT — READ FIRST
+
+Fetch from the remote and verify repository state before making any
+changes. Confirm all 5.7A work is present on origin/main before
+starting (git log -1 --oneline; git ls-remote origin main — both must
+match).
+
+This phase hardens the architecture actually built in 5.7A:
+
+- ProteinIdentifierResolver (lib/protein/identifier-resolver.ts) —
+  RefSeq → UniProt resolution via the UniProt ID Mapping API, with a
+  deterministic multi-mapping rule (exactly 1 reviewed entry →
+  resolved; 2+ reviewed → ambiguous; 0 reviewed → unresolved), its own
+  cache (protein-id-map:{refseqAccession}, 24h TTL), and its own rate
+  limiter, independent of NCBI/Reactome/InterPro.
+- ProteinDomainService (lib/protein/domain-fetch.ts) — InterPro REST
+  client consuming the resolved UniProt accession, with its own cache
+  (proteindomain:{proteinAccession}, keyed by RefSeq, 24h TTL),
+  pagination, and no deduplication of distinct signatures.
+- The Protein Domains UI section in GeneExplorerSection, with
+  deterministic ordering and two distinct empty states (identifier
+  unresolved vs. resolved-but-no-domains).
+
+This is a hardening phase per the project's Phase Pattern
+(Foundation → Hardening → Freeze). It adds no new sources, no new
+fields, no new UI, and no domain-function interpretation. It performs
+validation only, per the Hardening Prompt Pattern already used for
+5.3C, 5.4C, 5.5C, and 5.6C.
+
+Explicitly out of scope for this phase (do not implement, even if
+tempting mid-session): AlphaFold, PDBe, STRING, BioGRID, structure
+visualization, any additional domain data source, new ProteinDomain
+fields, new UI sections, or any promotion of ProteinIdentifierResolver
+to Frozen Architecture (that decision is deferred to after Phase 5.8
+per 5.7A's documented provisional-status rule).
+
+---
+
+IMPLEMENTATION SAFETY
+
+1. Create a git checkpoint before making any change.
+2. Run TypeScript after each step. Fix regressions immediately.
+3. Never commit code that does not compile.
+4. Push after each logical milestone, verified via
+   git ls-remote origin main.
+5. If a genuine bug is found: make only the smallest targeted fix,
+   document it in PHASE-5.7B-FINDINGS.md, and re-run the full
+   regression set after the fix. Do not use a bug fix as an opening to
+   redesign the resolver or domain service.
+6. If something surfaces that requires new functionality or an
+   architectural change (not a bug fix): STOP, document it as
+   out-of-scope in PHASE-5.7B-FINDINGS.md, and do not implement it in
+   this session.
+
+Architecture Freeze Rule: Do not redesign ProteinIdentifierResolver,
+ProteinDomainService, ProteinRecord, or ProteinResearchContext. Do not
+remove or bypass ProteinIdentifierResolver — all domain lookups must
+continue to route through it.
+
+Documentation Freeze: Create/update only PHASE-5.7B-FINDINGS.md and
+PHASE-5.7B-FINAL-REPORT.md.
+
+---
+
+STEP 0 — BASELINE VERIFICATION
+
+git status
+git branch -vv
+git log -1 --oneline
+git ls-remote origin main
+
+Confirm: clean working tree; branch main; upstream tracking
+origin/main; local and remote commit hashes match; TypeScript passes
+using the project's established TypeScript verification command — the
+same one used throughout Phases 5.1–5.7A (typically `npm run check` or
+equivalent; use whichever command this repository actually has
+configured, do not introduce a different one). Confirm the existing
+Protein Explorer opens successfully for TP53, including the Protein
+Domains section, before beginning hardening work.
+
+---
+
+STEP 1 — FULL REGRESSION SWEEP
+
+Confirm unaffected, exactly as before 5.7A:
+
+- Phase R (Biological Query Resolver) — all resolution paths.
+- Gene Explorer, Transcript Explorer, Variant Explorer, Clinical
+  Evidence, Biological Function Explorer (GO + Pathways).
+- 5.4B's existing Region:/Site: role chips — untouched by 5.7A's
+  additions, still rendering exactly as before.
+- Gene FASTA, Transcript FASTA/CDS, Protein FASTA downloads.
+- Protein Explorer overall layout and section order unchanged aside
+  from the additive Protein Domains section.
+
+Run for TP53, BRCA1, CFTR, EGFR, and mouse Trp53.
+
+---
+
+STEP 2 — EDGE CASE VALIDATION
+
+1. Zero domains — a protein that resolves to UniProt successfully but
+   has no InterPro annotations. Confirm the "resolved but no domains"
+   empty state, not a crash or the unresolved-identifier state.
+2. Very large domain set — confirm no truncation, no UI performance
+   collapse, and correct deterministic ordering at scale.
+3. Overlapping domains — confirm all overlapping signatures from
+   different member databases render independently; none are merged,
+   truncated, or deduplicated.
+4. Non-human proteins — confirm mouse Trp53 (and at least one other
+   non-human protein if convenient) resolves and returns domain data
+   natively, not through a special-cased path.
+5. Malformed/partial InterPro response — confirm graceful degradation
+   (skip malformed entries, preserve the rest), not a crash.
+6. Pagination — confirm multi-page InterPro responses are fully
+   retrieved before normalization, using a protein accession known to
+   produce multiple InterPro pages, or an existing controlled
+   test/fixture mechanism if one already exists. Do not modify
+   production retrieval logic solely to manufacture a multi-page
+   case.
+7. Domain cache correctness — confirm cache hit on second lookup for
+   the same protein (near-zero latency), and that cache entries are
+   correctly invalidated after the documented 24h TTL logic (verify
+   the TTL check path, not necessarily by waiting 24 real hours).
+8. Rate limiter isolation — confirm the InterPro rate limiter and the
+   UniProt mapping rate limiter operate independently of each other
+   and of NCBI/Reactome/GO limiters; a burst of requests to one does
+   not throttle or interfere with another.
+9. Deterministic ordering — confirm domains are sorted by
+   startPosition ascending, domainName as tiebreaker, null-position
+   entries last, and that this ordering is stable across repeated
+   requests regardless of the source API's return order.
+10. External links — for each displayed domain, confirm the linked
+    source record corresponds to the displayed canonical domainId.
+    Links must be constructed from domainId, never from domainName.
+11. ProteinIdentifierResolver validation — verify independently:
+    - a successful mapping returns the expected UniProt accession;
+    - a repeated resolution of the same RefSeq accession is served
+      from the resolver cache (not re-hitting the UniProt API);
+    - an unresolved mapping (0 reviewed entries) produces the
+      documented deterministic empty state;
+    - an ambiguous mapping (2+ reviewed entries) produces the
+      documented deterministic ambiguous state — do not silently pick
+      one. If a real biological test case cannot be obtained safely
+      against live UniProt data, validate this branch using an
+      existing test/mock fixture or controlled response fixture
+      instead — do not modify production behavior solely to
+      manufacture the case, and do not spend excessive effort
+      searching for an exotic real-world protein;
+    - resolver cache keys remain based on the canonical RefSeq
+      protein accession, never on UniProt accession or protein name.
+14. Upstream failure classification — distinguish confirmed empty
+    biological results from transient upstream/API failures, for both
+    UniProt mapping and InterPro retrieval. A source outage, timeout,
+    rate-limit response, or malformed upstream response must never be
+    presented to the user as "no domains" — "no domains" and "could
+    not retrieve domains" are scientifically and operationally
+    different states and must remain distinguishable at both the API
+    and UI layers.
+12. End-to-end identifier pipeline — confirm a RefSeq protein
+    accession is resolved to the expected UniProt accession, that the
+    resolved UniProt accession is what's actually sent to InterPro,
+    and that the original RefSeq accession remains the canonical
+    proteinAccession in the returned ProteinDomain records and in the
+    domain cache key. Confirm no code path anywhere substitutes
+    UniProt for RefSeq as the internal identifier.
+13. Resolver timeout/retry behavior — confirm a mapping timeout or
+    transient upstream failure is distinguishable in code from a
+    confirmed unresolved mapping (0 reviewed entries), follows the
+    implemented poll/retry policy, and is NOT cached as a permanent
+    unresolved result — a later retry for the same accession must be
+    able to succeed once the transient condition clears.
+
+Run TypeScript after each item; fix immediately if a genuine bug
+surfaces (per Implementation Safety Rule 5).
+
+---
+
+STEP 3 — PERFORMANCE SPOT CHECK
+
+Record cold-cache and warm-cache latency for at least one protein
+end-to-end (resolver + InterPro). No specific target is mandated —
+record actual numbers in the final report so future phases have a
+baseline for comparison.
+
+---
+
+STEP 4 — API CONTRACT VERIFICATION
+
+Confirm no existing exported type (ProteinDomain,
+ProteinIdentifierMapping, or any pre-5.7A type) has been renamed or
+reshaped during hardening. Confirm the POST /api/protein/domains route
+contract (request/response shape, both empty-state cases) is unchanged
+from what 5.7A shipped.
+
+Confirm /api/protein/domains does not expose upstream API credentials,
+internal cache implementation details, or unnecessary raw upstream
+response payloads (UniProt/InterPro) to the client — only the fields
+defined in the ProteinDomain and error-state contracts should reach
+the response body.
+
+---
+
+CREDIT SAFETY RULE
+
+If credits run low: finish the current step, run TypeScript, commit
+and push immediately (verify via git ls-remote origin main), write
+PHASE-5.7B-PARTIAL-REPORT.md with completed/remaining steps.
+
+---
+
+STEP 5 — FINAL DOCUMENTATION
+
+Write PHASE-5.7B-FINAL-REPORT.md:
+
+1. Regression results (Step 1), with actual evidence per protein.
+2. Edge case results (Step 2, all 14 items), item by item, with
+   actual evidence — not "all passed" as a blanket statement.
+3. Any bugs found and the smallest-fix rationale for each.
+4. Any out-of-scope findings documented and explicitly deferred.
+5. Performance baseline numbers (Step 3).
+6. API contract confirmation (Step 4).
+7. Explicit confirmation that ProteinIdentifierResolver remains
+   provisional (not Frozen Architecture) and a note that freeze
+   eligibility is still deferred to after Phase 5.8.
+
+---
+
+STEP 6 — FREEZE
+
+Only after Step 5's report is complete and all regressions and edge
+cases pass (or documented findings are explicitly accepted as
+known/deferred, not silently ignored):
+
+git tag v5.7-complete
+git push origin v5.7-complete
+git ls-remote --tags origin v5.7-complete
+
+Confirm the tag exists both locally and on the remote before
+considering this phase complete.
+
+STOP. Do NOT implement Phase 5.8 in this session. Do NOT add
+ProteinIdentifierResolver to the Frozen Architecture list — its status
+remains provisional per 5.7A's documentation. Do NOT commit broken
+code at any step.

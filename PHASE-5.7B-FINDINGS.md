@@ -89,3 +89,36 @@ contains environment/memory changes, generated build artifacts, and
 uploaded prompt files, but no changes under the Protein Domains
 implementation paths. The seventh commit is the Step 0 findings report and
 another uploaded prompt file. Therefore `origin/main` was **not** pushed.
+
+## Current Step 0 rerun
+
+The baseline was rerun in the current environment after the manual push:
+
+- Branch: `main`
+- Local HEAD: `f59eba53deb6acebadfa79ad167f8082a3cdf856`
+- Remote `origin/main`: `f59eba53deb6acebadfa79ad167f8082a3cdf856`
+- Hash result: **matched**
+- Upstream tracking: `main` tracks `origin/main`
+- The newly uploaded prompt remains an untracked attachment only
+
+The TypeScript portion of Step 0 was then run with the established command:
+
+```text
+pnpm run typecheck
+```
+
+It failed before the workspace build could complete because the current
+dependency installation is incomplete:
+
+- missing `node` type definitions
+- missing `drizzle-orm/node-postgres`
+- missing `pg`
+- missing `@tanstack/react-query`
+- missing `zod`
+
+The prior frozen workspace install remains blocked by Replit's package
+firewall while fetching locked `orval@8.9.1`, so the missing dependencies
+cannot be repaired without resolving that environment-level blocker.
+Because Step 0 requires TypeScript to pass, Phase 5.7B stopped at Step 0
+again. Steps 1–6 were not run, no application or architecture files were
+changed, and no Phase 5.7B tag was created.
