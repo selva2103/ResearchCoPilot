@@ -44,3 +44,48 @@ violate the baseline-stop rule.
 Synchronize the intended Phase 5.7A commits with `origin/main`, then rerun
 Step 0. Do not begin Phase 5.7B hardening until the local HEAD and
 `git ls-remote origin main` resolve to the same commit.
+
+## Pre-push history audit
+
+The requested command `git log 0dcf43f..HEAD --oneline` returned **seven**
+commits, not six. The exact `git show --stat` review found no protein-domain
+implementation paths in this local-only range:
+
+1. `d163b67` — **Update memory and configuration to address replit package
+   firewall and environment dependencies**
+   - `.agents/memory/MEMORY.md`: 1 line added
+   - `.agents/memory/replit-package-firewall.md`: 10 lines added
+   - `.replit`: 2-line environment change
+   - one uploaded environment-setup prompt: 44 lines added
+   - Total: 4 files, 56 insertions, 1 deletion
+2. `af89b86` — **Remove analyze API route and update build artifacts**
+   - 160 generated `artifacts/research-copilot/.next/**` files only
+   - Includes generated cache packs and generated route/page output
+   - Total: 160 files, 26 insertions, 8,236 deletions
+   - No application source path changed
+3. `9f537e0` — **Update Replit configuration and remove app page artifacts**
+   - `.replit`: 10-line workflow/configuration change
+   - 19 generated `artifacts/research-copilot/.next/**` files
+   - Total: 20 files, 11 insertions, 11,585 deletions
+4. `e022c8c` — **Update Next.js build artifacts and manifest files**
+   - 19 generated `artifacts/research-copilot/.next/**` files
+   - Total: 19 files, 11,574 insertions, 6 deletions
+5. `07549bc` — **Add validation report for phase 5 protein domains hardening**
+   - one uploaded Phase 5.7B prompt attachment: 249 lines added
+   - Total: 1 file, 249 insertions
+6. `03e66b6` — **Add validation documentation for phase 5 protein domain
+   hardening**
+   - one duplicate uploaded Phase 5.7B prompt attachment: 249 lines added
+   - Total: 1 file, 249 insertions
+7. `c0e67d6` — **Add findings document and validation asset for phase 5.7b**
+   - `PHASE-5.7B-FINDINGS.md`: 46 lines added
+   - one uploaded Phase 5.7B prompt attachment: 249 lines added
+   - Total: 2 files, 295 insertions
+
+The six commits that existed at the earlier audit point were
+`d163b67`, `af89b86`, `9f537e0`, `e022c8c`, `07549bc`, and `03e66b6`.
+They are not a legitimate Phase 5.7A implementation series: the range
+contains environment/memory changes, generated build artifacts, and
+uploaded prompt files, but no changes under the Protein Domains
+implementation paths. The seventh commit is the Step 0 findings report and
+another uploaded prompt file. Therefore `origin/main` was **not** pushed.
