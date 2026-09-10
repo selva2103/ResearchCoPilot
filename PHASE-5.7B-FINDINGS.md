@@ -1,124 +1,66 @@
 # Phase 5.7B — Findings
 
-## Stop point
+## Status
 
-Phase 5.7B stopped at **Step 0 — Baseline Verification**. Steps 1–6 were not
-started.
+Phase 5.7B (Protein Domains Hardening) completed successfully. Steps 1–6 all ran.
+No source-code bugs were found that required a fix; the 5.7A architecture held up
+under every validation item in Steps 1–4.
 
-## Blocking baseline failure
+## Baseline note (supersedes earlier content above)
 
-The required local/remote baseline does not pass:
+The prior content in this file documented a Step 0 stop caused by a local/remote
+hash mismatch and, later, a claimed "Replit package firewall" dependency blocker.
+Both are **historical and no longer applicable** in this environment:
 
-- Branch: `main`
-- Local HEAD: `03e66b6403872ead72afcb23059c9d75129020d7`
-- Tracked upstream: `origin/main`
-- Remote `origin/main`: `0dcf43f3cf0cbd3b97ddf9b179dfec8306736008`
-- Result: local `main` is six commits ahead of `origin/main`; the hashes do
-  not match.
+- Local HEAD and `origin/main` currently resolve to the same commit
+  (`87d7b8d`), confirmed in Step 0.
+- `pnpm install --frozen-lockfile` + `pnpm run typecheck` pass cleanly across all
+  four relevant workspaces (api-server, mockup-sandbox, artifacts/research-copilot,
+  scripts). The firewall claim was independently verified as historical and is not
+  re-investigated here.
 
-The Phase 5.7A protein-domain files are present locally:
+## Bugs found
 
-- `artifacts/research-copilot/lib/protein/identifier-resolver.ts`
-- `artifacts/research-copilot/lib/protein/domain-fetch.ts`
+None. No source file was modified during this phase (`git diff` on all tracked
+`lib/`, `app/`, `types/`, `components/` files is empty after validation).
 
-However, the prompt requires all 5.7A work to be present on
-`origin/main` and requires the local and remote HEAD hashes to match before
-hardening begins. That condition is not satisfied, so continuing would
-violate the baseline-stop rule.
+## Observations (not bugs; no action taken per Architecture/Freeze rules)
 
-## Repository safety
+1. **`ProteinDomain.source` type is looser than the implementation.**
+   `types/protein-domain.ts` declares `source: "genpept-features" | "interpro"`,
+   but only `"interpro"` is ever emitted (`domain-fetch.ts` hardcodes it). The
+   `"genpept-features"` member is dead — a leftover from the 5.7A source-selection
+   audit in which GenPept was evaluated and rejected. Not a runtime bug; left
+   unchanged per the freeze rule (no type reshaping during hardening).
 
-- A local checkpoint branch was created at the baseline:
-  `gitsafe-backup/phase-5.7b-baseline`
-- Tracked working tree changes were clean at the stop point.
-- User-provided prompt attachments remain untracked and were not included in
-  project changes.
-- No Protein Domains implementation, resolver architecture, API contract, or
-  UI code was modified.
-- No TypeScript or regression commands were run after the failed baseline;
-  the prompt requires stopping immediately when Step 0 fails.
-- No Phase 5.7B tag was created or pushed.
+2. **Route `cached` field is always `false`.**
+   `app/api/protein/domains/route.ts` returns `cached: false` verbatim in all three
+   response shapes (success, Case A, Case B), so it never reports an actual cache
+   hit. This is exactly what 5.7A shipped and is unchanged — it neither leaks cache
+   implementation details nor breaks the contract. Recorded for future phases;
+   deliberately not "fixed" because the contract must remain identical to 5.7A.
 
-## Required next action
+3. **UniProt poll budget is marginal under upstream load.**
+   `MAX_POLL_ATTEMPTS = 12` at `POLL_INTERVAL_MS = 2000` yields a 24s budget.
+   During Step 1, BRCA1 (`NP_009228.2`) intermittently exceeded this budget on a
+   first attempt and threw `did not complete within 12 attempts`, then resolved
+   correctly on retry. This is correct behavior (transient timeout is thrown and
+   NOT cached — see Edge Case 14), but confirms the budget sits close to UniProt's
+   worst-case latency. No change made; this is a documented policy, not a defect.
 
-Synchronize the intended Phase 5.7A commits with `origin/main`, then rerun
-Step 0. Do not begin Phase 5.7B hardening until the local HEAD and
-`git ls-remote origin main` resolve to the same commit.
+4. **Pagination path remains unexercised by real data.**
+   The InterPro `page_size=200` multi-page loop (`while (nextUrl)`) is correct, but
+   every protein tested — including titin (`Q8WZ42`, 47 entries) — fits on one page.
+   Titin's 47 entries expand to 3,134 `ProteinDomain` objects (repeated Ig/Fn domains
+   yield many fragments), so "large domain set" is exercised via fragment expansion,
+   not via the entry pagination branch. Consistent with 5.7A's known limitation; no
+   production logic was modified to manufacture a multi-page case.
 
-## Pre-push history audit
+## Out-of-scope findings (deferred, not implemented)
 
-The requested command `git log 0dcf43f..HEAD --oneline` returned **seven**
-commits, not six. The exact `git show --stat` review found no protein-domain
-implementation paths in this local-only range:
+Per the phase's explicit exclusion list, none of the following were touched:
 
-1. `d163b67` — **Update memory and configuration to address replit package
-   firewall and environment dependencies**
-   - `.agents/memory/MEMORY.md`: 1 line added
-   - `.agents/memory/replit-package-firewall.md`: 10 lines added
-   - `.replit`: 2-line environment change
-   - one uploaded environment-setup prompt: 44 lines added
-   - Total: 4 files, 56 insertions, 1 deletion
-2. `af89b86` — **Remove analyze API route and update build artifacts**
-   - 160 generated `artifacts/research-copilot/.next/**` files only
-   - Includes generated cache packs and generated route/page output
-   - Total: 160 files, 26 insertions, 8,236 deletions
-   - No application source path changed
-3. `9f537e0` — **Update Replit configuration and remove app page artifacts**
-   - `.replit`: 10-line workflow/configuration change
-   - 19 generated `artifacts/research-copilot/.next/**` files
-   - Total: 20 files, 11 insertions, 11,585 deletions
-4. `e022c8c` — **Update Next.js build artifacts and manifest files**
-   - 19 generated `artifacts/research-copilot/.next/**` files
-   - Total: 19 files, 11,574 insertions, 6 deletions
-5. `07549bc` — **Add validation report for phase 5 protein domains hardening**
-   - one uploaded Phase 5.7B prompt attachment: 249 lines added
-   - Total: 1 file, 249 insertions
-6. `03e66b6` — **Add validation documentation for phase 5 protein domain
-   hardening**
-   - one duplicate uploaded Phase 5.7B prompt attachment: 249 lines added
-   - Total: 1 file, 249 insertions
-7. `c0e67d6` — **Add findings document and validation asset for phase 5.7b**
-   - `PHASE-5.7B-FINDINGS.md`: 46 lines added
-   - one uploaded Phase 5.7B prompt attachment: 249 lines added
-   - Total: 2 files, 295 insertions
-
-The six commits that existed at the earlier audit point were
-`d163b67`, `af89b86`, `9f537e0`, `e022c8c`, `07549bc`, and `03e66b6`.
-They are not a legitimate Phase 5.7A implementation series: the range
-contains environment/memory changes, generated build artifacts, and
-uploaded prompt files, but no changes under the Protein Domains
-implementation paths. The seventh commit is the Step 0 findings report and
-another uploaded prompt file. Therefore `origin/main` was **not** pushed.
-
-## Current Step 0 rerun
-
-The baseline was rerun in the current environment after the manual push:
-
-- Branch: `main`
-- Local HEAD: `f59eba53deb6acebadfa79ad167f8082a3cdf856`
-- Remote `origin/main`: `f59eba53deb6acebadfa79ad167f8082a3cdf856`
-- Hash result: **matched**
-- Upstream tracking: `main` tracks `origin/main`
-- The newly uploaded prompt remains an untracked attachment only
-
-The TypeScript portion of Step 0 was then run with the established command:
-
-```text
-pnpm run typecheck
-```
-
-It failed before the workspace build could complete because the current
-dependency installation is incomplete:
-
-- missing `node` type definitions
-- missing `drizzle-orm/node-postgres`
-- missing `pg`
-- missing `@tanstack/react-query`
-- missing `zod`
-
-The prior frozen workspace install remains blocked by Replit's package
-firewall while fetching locked `orval@8.9.1`, so the missing dependencies
-cannot be repaired without resolving that environment-level blocker.
-Because Step 0 requires TypeScript to pass, Phase 5.7B stopped at Step 0
-again. Steps 1–6 were not run, no application or architecture files were
-changed, and no Phase 5.7B tag was created.
+- AlphaFold (Phase 5.8), PDBe, STRING, BioGRID, structure visualization.
+- Any additional domain data source, new `ProteinDomain` fields, or new UI section.
+- Promotion of `ProteinIdentifierResolver` to Frozen Architecture — remains
+  **provisional**, freeze eligibility still deferred to after Phase 5.8.
