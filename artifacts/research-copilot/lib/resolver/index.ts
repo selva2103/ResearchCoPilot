@@ -278,6 +278,8 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
   let ambiguous = false;
   const confidenceParts: number[] = [];
   let contextRemainder: string | null = null;
+  // Strict disease pre-check result, reused in Step 5 to avoid duplicate calls.
+  let preDisease: Awaited<ReturnType<typeof resolveDisease>> | undefined;
 
   // ── Step 3: Gene extraction ────────────────────────────────────────────────
   let geneApiResult: Awaited<ReturnType<typeof resolveGene>> = null;
@@ -313,7 +315,16 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
         const idx = tokens.findIndex((t) => looksLikeGeneToken(t));
         if (idx >= 0) {
           const candidateResult = await resolveGene(tokens[idx].toUpperCase());
-          if (candidateResult) {
+          // Accept an embedded-token gene only when its official symbol equals
+          // the token, or it resolved to human. Rejects cross-organism picks
+          // such as "Huntington" -> htt (Xenopus) in "Huntington disease".
+          const embeddedOk =
+            candidateResult !== null &&
+            candidateResult !== undefined &&
+            (candidateResult.normalizedQuery.toUpperCase() ===
+              tokens[idx].toUpperCase() ||
+              candidateResult.organism === "Homo sapiens");
+          if (candidateResult && embeddedOk) {
             geneApiResult = candidateResult;
             contextRemainder = tokens.filter((_, i) => i !== idx).join(" ");
           }
@@ -354,7 +365,13 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
   } else if (!gene) {
     // Preserve original rate-limit behaviour: NCBI Taxonomy is only called
     // when no gene was already resolved and no local organism synonym matched.
-    const skipOrganism = expanded && synonymPreferredType === "Disease";
+    let skipOrganism = expanded && synonymPreferredType === "Disease";
+    if (!skipOrganism) {
+      // An exact MedGen/MeSH disease term wins over a coincidental taxonomy
+      // name (e.g. "anemia" the fern genus, "COVID-19" the virus).
+      preDisease = await resolveDisease(q);
+      if (preDisease && preDisease.confidence >= 0.6) skipOrganism = true;
+    }
     if (!skipOrganism) {
       const organismApiResult = await resolveOrganism(q);
       if (organismApiResult && organismApiResult.confidence >= 0.6) {
@@ -399,7 +416,10 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
     }
 
     if (diseaseQuery) {
-      const diseaseApiResult = await resolveDisease(diseaseQuery);
+      const diseaseApiResult =
+        preDisease !== undefined && diseaseQuery === q
+          ? preDisease
+          : await resolveDisease(diseaseQuery);
       if (diseaseApiResult && diseaseApiResult.confidence >= 0.6) {
         disease = { name: diseaseApiResult.normalizedQuery };
         confidenceParts.push(diseaseApiResult.confidence);
