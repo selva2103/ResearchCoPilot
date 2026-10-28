@@ -299,7 +299,7 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
     // used to destroy that information before resolveGene ever saw it.
     const wholeStringCandidate = GENE_SYMBOL_RE.test(q)
       ? q
-      : GENE_SYMBOL_RE.test(q.toUpperCase()) && /\d/.test(q)
+      : GENE_SYMBOL_RE.test(q.toUpperCase())
       ? q
       : null;
 
