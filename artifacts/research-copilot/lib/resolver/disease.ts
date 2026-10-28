@@ -139,46 +139,75 @@ export async function resolveDisease(
 ): Promise<Omit<QueryResolution, "originalQuery"> | null> {
   const q = query.trim();
 
-  const searchUrl =
+  // Phase R: strict acceptance. Free-text MedGen/MeSH ESearch ranking is
+  // arbitrary (plain words like "river" match disease-typed concepts), so a
+  // query is a disease ONLY if (a) MedGen has a concept whose exact title
+  // equals the query and is disease-typed, or (b) MeSH has an exact term /
+  // entry term equal to the query whose descriptor sits in tree branch C
+  // (Diseases). Otherwise return null and let the resolver fall through.
+  const normT = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const qClean = q.replace(/"/g, "");
+  let best: MedGenESummaryEntry | undefined;
+  let viaMesh = false;
+  let meshTitle: string | undefined;
+  let meshUid: string | undefined;
+
+  const xtitUrl =
     `${NCBI_BASE}/esearch.fcgi?db=medgen` +
-    `&term=${encodeURIComponent(q)}&retmax=5&retmode=json`;
-  const searchData = (await resolverFetch(searchUrl)) as MedGenESearchResult;
-  const count = parseInt(searchData.esearchresult.count, 10) || 0;
-  const ids = searchData.esearchresult.idlist ?? [];
+    `&term=${encodeURIComponent(`"${qClean}"[XTIT]`)}&retmax=5&retmode=json`;
+  const xtitData = (await resolverFetch(xtitUrl)) as MedGenESearchResult;
+  const xtitIds = xtitData.esearchresult?.idlist ?? [];
+  if (xtitIds.length > 0) {
+    await sleep(RESOLVER_RATE_DELAY_MS);
+    const summaryUrl =
+      `${NCBI_BASE}/esummary.fcgi?db=medgen` +
+      `&id=${xtitIds.join(",")}&retmode=json`;
+    const summaryData = (await resolverFetch(summaryUrl)) as MedGenESummaryResult;
+    const entries = (summaryData.result?.uids ?? [])
+      .map((uid) => summaryData.result[uid])
+      .filter((e): e is MedGenESummaryEntry => Boolean(e));
+    best = entries.find(
+      (e) =>
+        normT(e.title ?? "") === normT(q) && isDiseaseSemanticType(e.semantictype)
+    );
+  }
 
-  if (count === 0 || ids.length === 0) return null;
+  if (!best) {
+    await sleep(RESOLVER_RATE_DELAY_MS);
+    const meshSearchUrl =
+      `${NCBI_BASE}/esearch.fcgi?db=mesh` +
+      `&term=${encodeURIComponent(`"${qClean}"[MESH]`)}&retmax=5&retmode=json`;
+    const meshSearch = (await resolverFetch(meshSearchUrl)) as MedGenESearchResult;
+    const meshIds = meshSearch.esearchresult?.idlist ?? [];
+    if (meshIds.length > 0) {
+      await sleep(RESOLVER_RATE_DELAY_MS);
+      const meshSummaryUrl =
+        `${NCBI_BASE}/esummary.fcgi?db=mesh` +
+        `&id=${meshIds.join(",")}&retmode=json`;
+      const meshSummary = (await resolverFetch(meshSummaryUrl)) as {
+        result?: { uids?: string[] } & Record<string, any>;
+      };
+      for (const uid of meshSummary.result?.uids ?? []) {
+        const e = meshSummary.result?.[uid];
+        if (!e) continue;
+        const terms: string[] = Array.isArray(e.ds_meshterms) ? e.ds_meshterms : [];
+        const exact = terms.some((t) => normT(t) === normT(q));
+        const trees =
+          JSON.stringify(e.ds_idxlinks ?? "").match(/[A-Z]\d{2}(\.\d+)*/g) ?? [];
+        if (exact && trees.some((t) => t.startsWith("C"))) {
+          viaMesh = true;
+          meshTitle = terms[0];
+          meshUid = String(uid);
+          break;
+        }
+      }
+    }
+  }
 
-  await sleep(RESOLVER_RATE_DELAY_MS);
+  if (!best && !viaMesh) return null;
 
-  // Fetch summaries for all returned IDs (up to 5)
-  const summaryUrl =
-    `${NCBI_BASE}/esummary.fcgi?db=medgen` +
-    `&id=${ids.join(",")}&retmode=json`;
-  const summaryData = (await resolverFetch(summaryUrl)) as MedGenESummaryResult;
-  const uids = summaryData.result.uids ?? [];
-  const entries = uids
-    .map((uid) => summaryData.result[uid])
-    .filter((e): e is MedGenESummaryEntry => Boolean(e));
-
-  if (entries.length === 0) return null;
-
-  // ── Preference 1: exact title match (case-insensitive) ────────────────────
-  const exactEntry = entries.find(
-    (e) => (e.title ?? "").toLowerCase() === q.toLowerCase()
-  );
-
-  // ── Preference 2: first result with a disease-type semantic type ──────────
-  const diseaseEntry = entries.find((e) => isDiseaseSemanticType(e.semantictype));
-
-  const best = exactEntry ?? diseaseEntry;
-  if (!best) return null;
-
-  // If the best match has a non-disease semantic type and it's not an exact
-  // match, reject it to prevent false positives (e.g. query for a chemical).
-  if (!exactEntry && !isDiseaseSemanticType(best.semantictype)) return null;
-
-  const isExact = (best.title ?? "").toLowerCase() === q.toLowerCase();
-  const confidence = isExact ? 0.85 : 0.72;
+  const isExact = Boolean(best);
+  const confidence = isExact ? 0.85 : 0.8;
 
   /**
    * normalizedQuery strategy:
@@ -191,34 +220,34 @@ export async function resolveDisease(
    *     Surfacing a subtype title (e.g. "Positive Mycobacterium tuberculosis
    *     sputum culture") as normalizedQuery would be actively misleading.
    */
-  const normalizedQuery = isExact ? (best.title ?? q) : q;
-  const representativeTitle = best.title ?? q;
+  const normalizedQuery = best ? (best.title ?? q) : q;
+  const representativeTitle = best?.title ?? meshTitle ?? q;
 
   // Associated organisms via hardcoded disease→organism table.
   // Known limitation: hardcoded; see lib/resolver/synonyms.ts DISEASE_ORGANISM_ASSOCIATIONS.
   const associatedOrganisms = getAssociatedOrganisms(q);
 
-  const semanticTypeStr = getSemanticTypeString(best.semantictype);
+  const semanticTypeStr = best ? getSemanticTypeString(best.semantictype) : undefined;
 
   return {
     normalizedQuery,
     queryType: "Disease",
     confidence,
     confidenceTier: toConfidenceTier(confidence),
-    matchedProvider: "medgen",
+    matchedProvider: (viaMesh ? "mesh" : "medgen") as never,
     // Use the representative CUI even for partial matches — it proves MedGen
     // recognised the domain, even if the exact concept wasn't the top hit.
-    primaryIdentifier: best.conceptid ?? best.uid,
-    identifierScheme: "medgen-cui",
+    primaryIdentifier: best ? (best.conceptid ?? best.uid) : `MeSH:${meshUid}`,
+    identifierScheme: (best ? "medgen-cui" : "mesh-ui") as never,
     scientificName: normalizedQuery,
     organism: undefined,
     taxonomyId: undefined,
     relationships: {
       organisms: associatedOrganisms.length > 0 ? associatedOrganisms : undefined,
     },
-    resolutionPath: isExact ? "medgen-exact" : "medgen-partial",
+    resolutionPath: (isExact ? "medgen-exact" : "mesh-exact") as never,
     notes: isExact
-      ? `Disease concept confirmed via MedGen (${semanticTypeStr ?? "unknown type"}).`
-      : `MedGen recognised "${q}" as a disease domain (top result: "${representativeTitle}"). Canonical concept not uniquely identified — originalQuery used as normalizedQuery. MEDIUM confidence.${semanticTypeStr ? ` SemanticType: ${semanticTypeStr}.` : ""}`,
+      ? `Disease concept confirmed via MedGen exact title (${semanticTypeStr ?? "unknown type"}).`
+      : `Disease confirmed via MeSH exact term "${representativeTitle}" (tree branch C: Diseases). No exact MedGen title; originalQuery used as normalizedQuery.`,
   };
 }
