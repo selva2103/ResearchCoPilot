@@ -52,6 +52,34 @@ export const ORGANISM_SYNONYMS: Record<string, OrganismSynonymEntry> = {
 
   chicken: { taxId: 9031, name: "Gallus gallus" },
   "gallus gallus": { taxId: 9031, name: "Gallus gallus" },
+
+  cow: { taxId: 9913, name: "Bos taurus" },
+  cattle: { taxId: 9913, name: "Bos taurus" },
+  bovine: { taxId: 9913, name: "Bos taurus" },
+  "bos taurus": { taxId: 9913, name: "Bos taurus" },
+
+  pig: { taxId: 9823, name: "Sus scrofa" },
+  swine: { taxId: 9823, name: "Sus scrofa" },
+  porcine: { taxId: 9823, name: "Sus scrofa" },
+  "sus scrofa": { taxId: 9823, name: "Sus scrofa" },
+
+  horse: { taxId: 9796, name: "Equus caballus" },
+  equine: { taxId: 9796, name: "Equus caballus" },
+  "equus caballus": { taxId: 9796, name: "Equus caballus" },
+
+  rabbit: { taxId: 9986, name: "Oryctolagus cuniculus" },
+  "oryctolagus cuniculus": { taxId: 9986, name: "Oryctolagus cuniculus" },
+
+  sheep: { taxId: 9940, name: "Ovis aries" },
+  "ovis aries": { taxId: 9940, name: "Ovis aries" },
+
+  dog: { taxId: 9615, name: "Canis lupus familiaris" },
+  canine: { taxId: 9615, name: "Canis lupus familiaris" },
+  "canis lupus familiaris": { taxId: 9615, name: "Canis lupus familiaris" },
+
+  cat: { taxId: 9685, name: "Felis catus" },
+  feline: { taxId: 9685, name: "Felis catus" },
+  "felis catus": { taxId: 9685, name: "Felis catus" },
 };
 
 /** Synonym keys sorted longest-first so multi-word names match before substrings. */
