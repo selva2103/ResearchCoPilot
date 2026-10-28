@@ -109,7 +109,7 @@ function looksLikeGeneSymbol(s: string): boolean {
  *   - The remainder after stripping the prefix is empty or too short (e.g. "mouse" alone)
  *   - The remainder contains spaces (e.g. "mouse tumor protein p53") — multi-word remainders
  *     are not gene symbols and should route through the normal pipeline
- *   - The remainder does not resemble a gene symbol (no uppercase letter or digit)
+ *   - The remainder is not a single alphanumeric token of 2-16 characters starting with a letter
  */
 export function detectOrganismPrefix(
   query: string
