@@ -133,10 +133,12 @@ export async function resolveGene(
   // match in the human gene search only. No cross-species fallback is
   // permitted for this path. Digit-containing inputs, already-uppercase
   // inputs, and explicitly organism-qualified queries keep existing rules.
+  // Applies to ALL bare alphabetic queries, including all-caps ones such as
+  // "HIV", "DNA", "PCR", which otherwise fell through to the unrestricted
+  // cross-organism search and resolved to arbitrary non-human genes.
   const requiresOfficialSymbolMatch =
     !detectedOrganism &&
-    /^[A-Za-z]{2,13}$/.test(trimmedOriginalCase) &&
-    /[a-z]/.test(trimmedOriginalCase);
+    /^[A-Za-z]{2,13}$/.test(trimmedOriginalCase);
 
   // When called from the organism-prefix pre-step, bypass the uppercase-only
   // symbol guard — non-human gene symbols are often mixed-case (Trp53, Sox2).
