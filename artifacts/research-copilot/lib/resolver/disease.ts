@@ -234,18 +234,18 @@ export async function resolveDisease(
     queryType: "Disease",
     confidence,
     confidenceTier: toConfidenceTier(confidence),
-    matchedProvider: (viaMesh ? "mesh" : "medgen") as never,
+    matchedProvider: viaMesh ? "mesh" : "medgen",
     // Use the representative CUI even for partial matches — it proves MedGen
     // recognised the domain, even if the exact concept wasn't the top hit.
     primaryIdentifier: best ? (best.conceptid ?? best.uid) : `MeSH:${meshUid}`,
-    identifierScheme: (best ? "medgen-cui" : "mesh-ui") as never,
+    identifierScheme: best ? "medgen-cui" : "mesh-ui",
     scientificName: normalizedQuery,
     organism: undefined,
     taxonomyId: undefined,
     relationships: {
       organisms: associatedOrganisms.length > 0 ? associatedOrganisms : undefined,
     },
-    resolutionPath: (isExact ? "medgen-exact" : "mesh-exact") as never,
+    resolutionPath: isExact ? "medgen-exact" : "mesh-exact",
     notes: isExact
       ? `Disease concept confirmed via MedGen exact title (${semanticTypeStr ?? "unknown type"}).`
       : `Disease confirmed via MeSH exact term "${representativeTitle}" (tree branch C: Diseases). No exact MedGen title; originalQuery used as normalizedQuery.`,
