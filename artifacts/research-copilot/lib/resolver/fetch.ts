@@ -38,16 +38,26 @@ export async function resolverFetch(url: string, maxRetries = 2): Promise<unknow
       await sleep(2000 * attempt);
     }
 
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "ResearchCoPilot/1.0 (Biological Query Resolver; contact: admin@example.com)",
-      },
-    });
-
-    if (res.status === 429) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          "User-Agent":
+            "ResearchCoPilot/1.0 (Biological Query Resolver; contact: admin@example.com)",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      // Network error or timeout: retry after backoff.
       lastError = new Error(
-        `NCBI rate-limited (HTTP 429); attempt ${attempt + 1}/${maxRetries + 1}`
+        `NCBI network error (${(err as Error)?.message ?? "unknown"}); attempt ${attempt + 1}/${maxRetries + 1}`
+      );
+      continue;
+    }
+
+    if (res.status === 429 || res.status >= 500) {
+      lastError = new Error(
+        `NCBI HTTP ${res.status} (retryable); attempt ${attempt + 1}/${maxRetries + 1}`
       );
       continue; // retry after backoff
     }
@@ -56,7 +66,21 @@ export async function resolverFetch(url: string, maxRetries = 2): Promise<unknow
       throw new Error(`NCBI HTTP ${res.status} for ${url.slice(0, 120)}`);
     }
 
-    return res.json();
+    const body = (await res.json()) as unknown;
+    // NCBI occasionally returns HTTP 200 with a top-level error field.
+    if (
+      body !== null &&
+      typeof body === "object" &&
+      "error" in (body as Record<string, unknown>) &&
+      !("esearchresult" in (body as Record<string, unknown>)) &&
+      !("result" in (body as Record<string, unknown>))
+    ) {
+      lastError = new Error(
+        `NCBI error body (retryable): ${String((body as Record<string, unknown>).error).slice(0, 120)}; attempt ${attempt + 1}/${maxRetries + 1}`
+      );
+      continue;
+    }
+    return body;
   }
 
   throw lastError ?? new Error("NCBI fetch failed after all retries");
