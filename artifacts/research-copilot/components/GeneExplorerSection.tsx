@@ -38,6 +38,7 @@ import type { ProteinRecord } from "@/types/protein-record";
 import type { NormalizedQuery } from "@/types/normalized-query";
 import type { ProteinResearchContext } from "@/types/research-context";
 import type { ProteinDomain } from "@/types/protein-domain";
+import type { ProteinStructure, StructureResolutionResult } from "@/types/protein-structure";
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
@@ -1022,6 +1023,14 @@ function ProteinPanel({
   >(null);
   const domainsFetchedRef = useRef(false);
 
+  // ── Protein Structure (Phase 5.8A) — lazy, collapsed by default ────────────
+  const [structExpanded, setStructExpanded] = useState(false);
+  const [structResult, setStructResult] = useState<StructureResolutionResult | null>(null);
+  const [structLoading, setStructLoading] = useState(false);
+  const [structError, setStructError] = useState<string | null>(null);
+  const [structShowAll, setStructShowAll] = useState(false);
+  const structFetchedRef = useRef(false);
+
   const handleResearchContextToggle = async () => {
     const opening = !rcExpanded;
     setRcExpanded((v) => !v);
@@ -1087,6 +1096,46 @@ function ProteinPanel({
         setDetailError("Network error — protein detail unavailable.");
       } finally {
         setDetailLoading(false);
+      }
+    }
+  };
+
+  const handleStructureToggle = async () => {
+    const opening = !structExpanded;
+    setStructExpanded((v) => !v);
+    if (opening && !structFetchedRef.current && proteinRecord) {
+      structFetchedRef.current = true;
+      setStructLoading(true);
+      setStructError(null);
+      try {
+        const res = await fetch("/api/protein/structure", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accession: proteinRecord.proteinAccessionVersion,
+            geneId: proteinRecord.geneId,
+            organism: proteinRecord.organism,
+          }),
+        });
+        const result = (await res.json()) as Partial<StructureResolutionResult> & {
+          error?: string;
+          rateLimited?: boolean;
+        };
+        if (res.status >= 400 || !result.structureAvailability) {
+          structFetchedRef.current = false; // allow retry on next open
+          setStructError(
+            result.rateLimited
+              ? "Rate limit hit — please try again in a moment."
+              : result.error ?? "Structure data unavailable."
+          );
+        } else {
+          setStructResult(result as StructureResolutionResult);
+        }
+      } catch {
+        structFetchedRef.current = false;
+        setStructError("Network error — structure data unavailable.");
+      } finally {
+        setStructLoading(false);
       }
     }
   };
@@ -1497,6 +1546,142 @@ function ProteinPanel({
                               ))}
                             </div>
                           </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Protein Structure (Phase 5.8A) — expandable, lazy ── */}
+              <div className="rounded-md bg-slate-50 dark:bg-slate-900/40 border border-indigo-200 dark:border-indigo-800/60 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={handleStructureToggle}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                >
+                  <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-400 uppercase tracking-wide">
+                    🧬 Protein Structure
+                  </span>
+                  <span className="ml-auto text-slate-400 dark:text-slate-500 text-[11px]">
+                    {structExpanded ? "▲" : "▼"}
+                  </span>
+                </button>
+
+                {structExpanded && (
+                  <div className="px-2 pb-2 pt-0.5 border-t border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                    {structLoading && (
+                      <div className="flex items-center gap-1.5">
+                        <LoadingSpinner />
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          Loading structures (this can take up to ~20 s)…
+                        </span>
+                      </div>
+                    )}
+
+                    {!structLoading && structError && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 italic">⚠️ {structError}</p>
+                    )}
+
+                    {!structLoading && !structError && structResult && (
+                      <>
+                        {structResult.identifierStatus !== "resolved" && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            Protein identifier could not be resolved; no structure lookup was attempted.
+                          </p>
+                        )}
+
+                        {structResult.identifierStatus === "resolved" && (
+                          <>
+                            {structResult.sourceStatuses.pdb === "error" && (
+                              <p className="text-xs text-amber-600 dark:text-amber-400 italic">
+                                ⚠️ Experimental structures (PDB) are temporarily unavailable.
+                              </p>
+                            )}
+                            {structResult.sourceStatuses.alphafold === "error" && (
+                              <p className="text-xs text-amber-600 dark:text-amber-400 italic">
+                                ⚠️ Predicted models (AlphaFold) are temporarily unavailable.
+                              </p>
+                            )}
+                            {structResult.structureAvailability === "none" && (
+                              <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                No 3D structures are available for this protein.
+                              </p>
+                            )}
+
+                            {structResult.structures.length > 0 && (
+                              <div className="space-y-1">
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                                  {structResult.structures.filter((x) => x.sourceDatabase === "pdb").length} experimental (PDB),{" "}
+                                  {structResult.structures.filter((x) => x.sourceDatabase === "alphafold").length} predicted (AlphaFold). Experimental structures are ranked by coverage, then resolution.
+                                </p>
+                                {(structShowAll ? structResult.structures : structResult.structures.slice(0, 20)).map((st: ProteinStructure, i: number) => {
+                                  const isPdb = st.sourceDatabase === "pdb";
+                                  const isIsoform = !isPdb && /^AF-.+-\d+-F\d+$/.test(st.sourceId);
+                                  const href = isPdb
+                                    ? `https://www.rcsb.org/structure/${st.sourceId}`
+                                    : `https://alphafold.ebi.ac.uk/entry/${st.uniprotAccession}`;
+                                  return (
+                                    <div
+                                      key={`${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}
+                                      className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 py-0.5"
+                                    >
+                                      <span
+                                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                          isPdb
+                                            ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                                            : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                                        }`}
+                                      >
+                                        {isPdb ? "Experimental" : isIsoform ? "Predicted · isoform" : "Predicted"}
+                                      </span>
+                                      <a
+                                        href={href}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-mono text-indigo-700 dark:text-indigo-400 hover:underline"
+                                      >
+                                        {st.sourceId}
+                                      </a>
+                                      {isPdb && st.instanceId && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                          entity {st.entityId} · chain {st.instanceId}
+                                        </span>
+                                      )}
+                                      {st.method && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">{st.method}</span>
+                                      )}
+                                      {st.resolution !== null && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">{st.resolution} Å</span>
+                                      )}
+                                      {isPdb && st.coverageFraction !== null && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                          covers {Math.round(st.coverageFraction * 100)}%
+                                          {st.coverageStart !== null && st.coverageEnd !== null
+                                            ? ` (residues ${st.coverageStart}–${st.coverageEnd})`
+                                            : ""}
+                                        </span>
+                                      )}
+                                      {!isPdb && st.confidenceScore !== null && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                                          pLDDT {st.confidenceScore.toFixed(1)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                {!structShowAll && structResult.structures.length > 20 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setStructShowAll(true)}
+                                    className="text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline"
+                                  >
+                                    Show all {structResult.structures.length} structures
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
                         )}
                       </>
                     )}
