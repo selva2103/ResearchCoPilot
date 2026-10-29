@@ -24,6 +24,12 @@ export interface NormalizedQuery {
   /** Original user input, always preserved unmodified (Bug 8). */
   rawQuery: string;
 
+  /**
+   * Set only when resolution failed with an error (e.g. NCBI outage), so callers
+   * can tell "service failed" apart from "nothing found". Absent on normal results.
+   */
+  degraded?: { reason: string };
+
   gene: {
     symbol: string;
     /** NCBI GeneID — the stable key. Null when a gene was recognized but not confirmed via NCBI. */

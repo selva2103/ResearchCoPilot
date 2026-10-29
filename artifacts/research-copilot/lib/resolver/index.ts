@@ -168,7 +168,7 @@ export async function resolveQuery(query: string): Promise<NormalizedQuery> {
       confidence: 0,
       reason: `Resolution failed with an error: ${message}. Degraded to empty NormalizedQuery.`,
     });
-    return emptyNormalized(trimmed);
+    return { ...emptyNormalized(trimmed), degraded: { reason: message } };
   }
 }
 
