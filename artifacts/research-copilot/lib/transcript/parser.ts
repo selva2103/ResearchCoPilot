@@ -18,7 +18,7 @@
  *     "protein isoform i NP_001394198.1, 7 coding  exons, ..."
  *   The protein accession is parsed from this line and attached to the transcript
  *   record directly above it. Confirmed via live gene_table inspection (TP53, 2026-07-03):
- *   the protein line for a coding transcript is always the line immediately after it.
+ *   the protein line for a coding transcript normally follows it directly; the parser scans up to 5 lines.
  *
  * Lines that are NOT transcript lines (skipped):
  *   - Exon table headers and coordinate lines
@@ -52,7 +52,8 @@ const TRANSCRIPT_LINE_RE =
 // ── Protein line regex ────────────────────────────────────────────────────────
 // Matches: "protein isoform {label} {ACC.VER} (optional CCDS), {N} coding  exons, ..."
 // Groups:  [1]=proteinAccessionVersion (NP_/XP_ only)
-const PROTEIN_LINE_RE = /^protein\s+isoform\s+\S+\s+([NX]P_[\d.]+)/i;
+// Accepts "protein isoform a NP_x", "protein isoform a precursor NP_x", "protein NP_x", etc.
+const PROTEIN_LINE_RE = /^protein\b[^()]*?\b([NX]P_\d+\.\d+)/i;
 
 // ── Main parser ───────────────────────────────────────────────────────────────
 
@@ -114,13 +115,20 @@ export function parseGeneTable(
     const status = refseqStatusFromAccession(accessionVersion);
 
     // ── Protein accession (NM_/XM_ only) ────────────────────────────────────
-    // The protein line for a coding transcript is always the line immediately
-    // after its transcript line (confirmed via live gene_table inspection).
+    // The protein line normally directly follows its transcript line (confirmed via
+    // live gene_table inspection); it is located by the bounded scan below.
     let proteinAccession: string | null = null;
     let proteinAccessionVersion: string | null = null;
     if (accessionPrefix === "NM_" || accessionPrefix === "XM_") {
-      const nextLine = (lines[i + 1] ?? "").trim();
-      const proteinMatch = PROTEIN_LINE_RE.exec(nextLine);
+      // Scan forward (bounded) until the next transcript line; the protein line
+      // normally follows immediately but may not for every annotation layout.
+      let proteinMatch: RegExpExecArray | null = null;
+      for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+        const l = (lines[j] ?? "").trim();
+        if (TRANSCRIPT_LINE_RE.test(l)) break;
+        const m = PROTEIN_LINE_RE.exec(l);
+        if (m) { proteinMatch = m; break; }
+      }
       if (proteinMatch) {
         proteinAccessionVersion = proteinMatch[1];
         const pDot = proteinAccessionVersion.lastIndexOf(".");
