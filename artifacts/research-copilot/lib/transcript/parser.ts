@@ -44,10 +44,11 @@ import {
 import type { ManeInfo } from "./fetch";
 
 // ── Transcript line regex ─────────────────────────────────────────────────────
-// Matches: {type} transcript variant {label} {ACC.VER}, {N} exons,  total annotated spliced exon length: {LEN}
+// Matches: {type} [transcript variant {label}] {ACC.VER}, {N} exons,  total annotated spliced exon length: {LEN}
+// The variant label is absent for single-transcript genes (e.g. "mRNA  NM_001101.5, 6 exons, ...").
 // Groups:  [1]=accessionVersion [2]=exonCount [3]=transcriptLength
 const TRANSCRIPT_LINE_RE =
-  /^(?:mRNA|RNA|ncRNA|tRNA|rRNA|precursor_RNA|tmRNA|scRNA|snoRNA|snRNA|misc_RNA|miscRNA)\s+transcript\s+variant\s+\S+\s+(\S+),\s+(\d+)\s+exons,\s+total\s+annotated\s+spliced\s+exon\s+length:\s+(\d+)/i;
+  /^(?:mRNA|RNA|ncRNA|tRNA|rRNA|precursor_RNA|tmRNA|scRNA|snoRNA|snRNA|misc_RNA|miscRNA)(?:\s+transcript\s+variant\s+\S+)?\s+(\S+),\s+(\d+)\s+exons,\s+total\s+annotated\s+spliced\s+exon\s+length:\s+(\d+)/i;
 
 // ── Protein line regex ────────────────────────────────────────────────────────
 // Matches: "protein isoform {label} {ACC.VER} (optional CCDS), {N} coding  exons, ..."
