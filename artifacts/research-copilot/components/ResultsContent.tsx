@@ -1274,8 +1274,24 @@ function QueryResolutionCard({
 
       <div className="px-5 py-4 space-y-4">
 
-        {/* Unknown / LOW tier — no confident match */}
-        {isUnknown && (
+        {/* Degraded — resolver itself failed; not a genuine empty result */}
+        {resolution.degraded && (
+          <div className="flex items-start gap-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
+            <span className="text-lg mt-0.5">⚠️</span>
+            <div>
+              <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                Lookup temporarily unavailable
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                The resolver could not complete this lookup ({resolution.degraded.reason}).
+                The result below may be incomplete — try again in a moment.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Unknown / LOW tier — no confident match (only when not degraded) */}
+        {!resolution.degraded && isUnknown && (
           <div className="flex items-start gap-3 rounded-xl bg-slate-50 dark:bg-slate-700/40 px-4 py-3">
             <span className="text-lg mt-0.5">❓</span>
             <div>
