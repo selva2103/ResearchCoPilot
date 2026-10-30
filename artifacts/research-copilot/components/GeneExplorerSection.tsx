@@ -1606,7 +1606,9 @@ function ProteinPanel({
                       <>
                         {structResult.identifierStatus !== "resolved" && (
                           <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-                            Protein identifier could not be resolved; no structure lookup was attempted.
+                            No UniProt entry could be confidently resolved for this protein
+                            (no reviewed entry — common for predicted proteins — or multiple
+                            ambiguous matches) — no structure lookup was attempted.
                           </p>
                         )}
 
