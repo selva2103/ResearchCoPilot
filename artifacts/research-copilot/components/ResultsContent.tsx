@@ -1232,6 +1232,62 @@ function QueryResolutionCard({
 }) {
   const router = useRouter();
 
+  // Problem D: protein-name fallback (UniProt). Hooks must run before the early return.
+  // Candidates are fetched once per query when nothing resolved; never auto-resolved.
+  const [proteinSearchState, setProteinSearchState] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [proteinSearch, setProteinSearch] = useState<{
+    candidates: Array<{ accession: string; name: string | null; gene: string | null; organism: string }>;
+    total: number | null;
+    searchedHumanOnly: boolean;
+  } | null>(null);
+  const [proteinSearchExpanded, setProteinSearchExpanded] = useState(false);
+  const proteinSearchQueryRef = useRef<string | null>(null);
+  const [proteinSearchRetry, setProteinSearchRetry] = useState(0);
+
+  useEffect(() => {
+    if (!resolution || resolution.degraded) return;
+    const unresolved =
+      !resolution.gene && !resolution.organism && !resolution.disease && !resolution.protein;
+    if (!unresolved) return;
+    const q = originalQuery.trim();
+    if (!q) return;
+    const key = `${q}#${proteinSearchRetry}`;
+    if (proteinSearchQueryRef.current === key) return;
+    proteinSearchQueryRef.current = key;
+
+    setProteinSearchState("loading");
+    setProteinSearch(null);
+    setProteinSearchExpanded(false);
+    fetch("/api/protein/search-by-name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (proteinSearchQueryRef.current !== key) return; // stale response
+        if (data.error) {
+          setProteinSearchState("error");
+          return;
+        }
+        if (data.skipped) {
+          setProteinSearchState("idle"); // too long to be a protein name; nothing was searched
+          return;
+        }
+        setProteinSearch({
+          candidates: data.candidates ?? [],
+          total: typeof data.total === "number" ? data.total : null,
+          searchedHumanOnly: data.searchedHumanOnly !== false,
+        });
+        setProteinSearchState("success");
+      })
+      .catch(() => {
+        if (proteinSearchQueryRef.current === key) setProteinSearchState("error");
+      });
+  }, [resolution, originalQuery, proteinSearchRetry]);
+
   // Don't render if no resolution data at all
   if (!resolution) return null;
 
@@ -1303,6 +1359,91 @@ function QueryResolutionCard({
                 organism, or disease with sufficient confidence. All modules searched
                 using the original query unchanged.
               </p>
+              {proteinSearchState === "loading" && (
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 italic mt-1.5">
+                  Searching reviewed UniProt entries...
+                </p>
+              )}
+              {proteinSearchState === "success" && proteinSearch && proteinSearch.candidates.length > 0 && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setProteinSearchExpanded((v) => !v)}
+                    className="text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:underline"
+                  >
+                    {proteinSearchExpanded ? "Hide" : "Show"} {proteinSearch.candidates.length} possible related protein
+                    {proteinSearch.candidates.length !== 1 ? "s" : ""} (UniProt)
+                  </button>
+                  {proteinSearchExpanded && (
+                    <div className="mt-2 space-y-1.5">
+                      {proteinSearch.total !== null && proteinSearch.total > proteinSearch.candidates.length && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Showing the first {proteinSearch.candidates.length} of {proteinSearch.total} reviewed{" "}
+                          {proteinSearch.searchedHumanOnly ? "human " : ""}UniProt matches.
+                        </p>
+                      )}
+                      {!proteinSearch.searchedHumanOnly && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          No reviewed human match. Showing other organisms; these cannot be opened from here.
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                        Candidate matches from a UniProt name search, not a confirmed result. Review before use.
+                      </p>
+                      {proteinSearch.candidates.map((c) => {
+                        const isHuman = c.organism === "Homo sapiens";
+                        const inner = (
+                          <>
+                            <span className="font-medium text-slate-700 dark:text-slate-200">
+                              {c.name ?? c.accession}
+                            </span>
+                            {c.gene && (
+                              <span className="ml-1.5 font-mono text-slate-500 dark:text-slate-400">{c.gene}</span>
+                            )}
+                            <span className="ml-1.5 text-slate-400 dark:text-slate-500">
+                              {c.organism} | {c.accession}
+                            </span>
+                          </>
+                        );
+                        return isHuman ? (
+                          <button
+                            key={c.accession}
+                            type="button"
+                            onClick={() => router.push(`/results?q=${encodeURIComponent(c.gene ?? c.accession)}`)}
+                            className="w-full text-left text-xs bg-white dark:bg-slate-800 rounded-lg px-2.5 py-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 border border-slate-200 dark:border-slate-600"
+                          >
+                            {inner}
+                          </button>
+                        ) : (
+                          <div
+                            key={c.accession}
+                            className="w-full text-xs bg-slate-100 dark:bg-slate-800/60 rounded-lg px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 opacity-70"
+                          >
+                            {inner}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {proteinSearchState === "success" && proteinSearch && proteinSearch.candidates.length === 0 && (
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 italic mt-1.5">
+                  No reviewed UniProt protein matched this name.
+                </p>
+              )}
+              {proteinSearchState === "error" && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 italic mt-1.5">
+                  Related-protein search unavailable.{" "}
+                  <button
+                    type="button"
+                    onClick={() => setProteinSearchRetry((n) => n + 1)}
+                    className="not-italic font-medium underline hover:no-underline"
+                  >
+                    Retry
+                  </button>
+                </p>
+              )}
             </div>
           </div>
         )}
