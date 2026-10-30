@@ -1491,12 +1491,31 @@ function ProteinPanel({
 
                     {!domainsLoading && !domainsError && domains !== null && (
                       <>
-                        {/* Case A — identifier could not be resolved */}
-                        {domainsResolutionStatus !== "resolved" && (
+                        {/* Case A1 — zero reviewed UniProt entries (e.g. predicted XP_ proteins) */}
+                        {domainsResolutionStatus === "unresolved" && (
                           <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-                            Protein identifier could not be resolved.
+                            No reviewed UniProt entry exists for this protein (common for
+                            computationally predicted proteins) — domain lookup requires a
+                            curated entry.
                           </p>
                         )}
+
+                        {/* Case A2 — multiple reviewed UniProt entries, ambiguous mapping */}
+                        {domainsResolutionStatus === "ambiguous" && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            This protein maps to multiple UniProt entries — domain lookup was
+                            skipped to avoid selecting the wrong one.
+                          </p>
+                        )}
+
+                        {/* Case A3 — identifier status unknown (defensive fallback) */}
+                        {domainsResolutionStatus !== "resolved" &&
+                          domainsResolutionStatus !== "unresolved" &&
+                          domainsResolutionStatus !== "ambiguous" && (
+                            <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                              Protein identifier could not be resolved.
+                            </p>
+                          )}
 
                         {/* Case B — resolved but no domains annotated */}
                         {domainsResolutionStatus === "resolved" && domains.length === 0 && (
