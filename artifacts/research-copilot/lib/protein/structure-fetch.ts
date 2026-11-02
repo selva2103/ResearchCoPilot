@@ -242,6 +242,7 @@ async function fetchAlphaFoldRecords(uniprotAccession: string): Promise<AlphaFol
   });
 
   if (!res.ok) {
+    if (res.status === 404) return []; // AlphaFold has no model for this accession (not an outage)
     if (res.status === 429) throw new Error("HTTP 429 — AlphaFold DB rate limit hit");
     throw new Error(`AlphaFold API HTTP ${res.status} for ${uniprotAccession}`);
   }
@@ -377,6 +378,7 @@ async function searchPdbEntities(uniprotAccession: string): Promise<string[]> {
     next: { revalidate: 0 },
   });
 
+  if (res.status === 204) return []; // RCSB search: no matching entities
   if (!res.ok) {
     if (res.status === 429) throw new Error("HTTP 429 — RCSB search rate limit hit");
     throw new Error(`RCSB search HTTP ${res.status} for ${uniprotAccession}`);
