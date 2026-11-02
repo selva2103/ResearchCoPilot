@@ -16,6 +16,7 @@ export default function ProteinStructureViewer({
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [note, setNote] = useState<string | null>(null);
+  const [detailed, setDetailed] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -34,7 +35,11 @@ export default function ProteinStructureViewer({
           render: renderReact18,
           spec: {
             ...spec,
-            layout: { initial: { isExpanded: false, showControls: false } },
+            layout: {
+                initial: detailed
+                  ? { isExpanded: false, showControls: true, regionState: { top: "full", left: "collapsed", right: "full", bottom: "hidden" } }
+                  : { isExpanded: false, showControls: false },
+              },
           },
         });
         if (disposed) { ui.dispose(); return; }
@@ -76,11 +81,18 @@ export default function ProteinStructureViewer({
     })();
 
     return () => { disposed = true; try { plugin?.dispose(); } catch {} };
-  }, [fileUrl, instanceId]);
+  }, [fileUrl, instanceId, detailed]);
 
   return (
     <div className="space-y-1">
-      <div ref={hostRef} style={{ position: "relative", width: "100%", height: 360 }} className="rounded border border-slate-200 dark:border-slate-700 overflow-hidden" />
+      <button
+        type="button"
+        onClick={() => { setStatus("loading"); setNote(null); setDetailed((d) => !d); }}
+        className="text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline"
+      >
+        {detailed ? "Hide full controls" : "Show full controls (sequence, components, settings, export)"}
+      </button>
+      <div ref={hostRef} style={{ position: "relative", width: "100%", height: detailed ? 640 : 360 }} className="rounded border border-slate-200 dark:border-slate-700 overflow-hidden" />
       {status === "loading" && <p className="text-[10px] text-slate-400 italic">Loading 3D viewer…</p>}
       {status === "error" && <p className="text-xs text-amber-600 dark:text-amber-400 italic">⚠️ Could not load this structure in the viewer.</p>}
       {note && <p className="text-[10px] text-slate-400 italic">{note}</p>}
