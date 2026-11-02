@@ -46,6 +46,14 @@ import type { OrganismSynonymEntry } from "@/lib/resolver/organism-synonyms";
 // organism names ("SARS-CoV-2") or disease names ("Leukemia").
 const GENE_SYMBOL_RE = /^[A-Z][A-Z0-9]{1,12}$/;
 
+// Hyphenated official-symbol shape (HLA-A, MT-CO1, NKX2-1, HLA-DRB1).
+// NOTE: the bare pattern above still excludes hyphens. Hyphenated queries are
+// admitted ONLY as a whole string and ONLY when NCBI Gene returns a human
+// entry whose official symbol, nomenclature symbol or exact alias equals the
+// query. There is no
+// cross-species fallback. Keep identical to the copy in lib/resolver/index.ts.
+const HYPHEN_SYMBOL_RE = /^[A-Za-z][A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){1,2}$/;
+
 // ── NCBI raw response shapes ──────────────────────────────────────────────────
 
 interface GeneESearchResult {
@@ -66,6 +74,7 @@ interface GeneESummaryEntry {
     scientificname: string;
     taxid: number;
   };
+  nomenclaturesymbol?: string; // nomenclature-authority symbol (e.g. MT-CO1 for COX1); not set on every gene
   otheraliases?: string;   // comma-separated list of synonyms / aliases
   summary?: string;
 }
@@ -136,9 +145,11 @@ export async function resolveGene(
   // Applies to ALL bare alphabetic queries, including all-caps ones such as
   // "HIV", "DNA", "PCR", which otherwise fell through to the unrestricted
   // cross-organism search and resolved to arbitrary non-human genes.
+  const isHyphenatedCandidate =
+    !detectedOrganism && HYPHEN_SYMBOL_RE.test(trimmedOriginalCase);
   const requiresOfficialSymbolMatch =
     !detectedOrganism &&
-    /^[A-Za-z]{2,13}$/.test(trimmedOriginalCase);
+    (/^[A-Za-z]{2,13}$/.test(trimmedOriginalCase) || isHyphenatedCandidate);
 
   // When called from the organism-prefix pre-step, bypass the uppercase-only
   // symbol guard — non-human gene symbols are often mixed-case (Trp53, Sox2).
@@ -154,7 +165,8 @@ export async function resolveGene(
   if (
     !detectedOrganism &&
     !GENE_SYMBOL_RE.test(trimmedOriginalCase) &&
-    !isMixedCaseBareCandidate
+    !isMixedCaseBareCandidate &&
+    !isHyphenatedCandidate
   )
     return null;
 
@@ -322,7 +334,22 @@ export async function resolveGene(
     await sleep(RESOLVER_RATE_DELAY_MS);
     const entries = await geneESummary(humanIds);
     const exact = entries.find((e) => exactSymbolMatch(e, q));
-    const best = requiresOfficialSymbolMatch ? exact : exact ?? entries[0];
+    const hyphenHit = isHyphenatedCandidate
+      ? entries.find(
+          (e) => e.organism.taxid === 9606 && exactSymbolMatch(e, q)
+        ) ??
+        entries.find(
+          (e) =>
+            e.organism.taxid === 9606 &&
+            (buildAliases(e).some((a) => a.toUpperCase() === q) ||
+              (e.nomenclaturesymbol ?? "").toUpperCase() === q)
+        )
+      : undefined;
+    const best = isHyphenatedCandidate
+      ? hyphenHit
+      : requiresOfficialSymbolMatch
+      ? exact
+      : exact ?? entries[0];
 
     if (best) {
       const aliases = buildAliases(best);

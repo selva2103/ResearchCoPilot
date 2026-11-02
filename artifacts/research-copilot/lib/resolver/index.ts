@@ -60,6 +60,9 @@ export type { NormalizedQuery };
 /** Mirrors gene.ts / genbank/search.ts — uppercase-only bare gene-symbol shape. */
 const GENE_SYMBOL_RE = /^[A-Z][A-Z0-9]{1,12}$/;
 
+/** Hyphenated gene-symbol shape (HLA-A, MT-CO1). Must match gene.ts. */
+const HYPHEN_SYMBOL_RE = /^[A-Za-z][A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){1,2}$/;
+
 /**
  * Broader gene-token pattern used only to spot an embedded gene-symbol-shaped
  * token inside a multi-word query (e.g. "TP53" inside "TP53 breast cancer").
@@ -302,6 +305,8 @@ async function _resolveQuery(rawQuery: string): Promise<NormalizedQuery> {
     const wholeStringCandidate = GENE_SYMBOL_RE.test(q)
       ? q
       : GENE_SYMBOL_RE.test(q.toUpperCase())
+      ? q
+      : HYPHEN_SYMBOL_RE.test(q)
       ? q
       : null;
 
