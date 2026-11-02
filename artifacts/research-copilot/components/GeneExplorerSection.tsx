@@ -32,6 +32,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import type { GeneRecord } from "@/types/gene-record";
 import type { TranscriptRecord } from "@/types/transcript-record";
 import type { ProteinRecord } from "@/types/protein-record";
@@ -42,6 +43,12 @@ import type { ProteinStructure, StructureResolutionResult } from "@/types/protei
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
+
+// Mol* is heavy and browser-only: load on demand, never on the server.
+const ProteinStructureViewer = dynamic(() => import("@/components/ProteinStructureViewer"), {
+  ssr: false,
+  loading: () => <p className="text-[10px] text-slate-400 italic">Loading 3D viewer…</p>,
+});
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -1032,6 +1039,7 @@ function ProteinPanel({
   const [structError, setStructError] = useState<string | null>(null);
   const [structShowAll, setStructShowAll] = useState(false);
   const structFetchedRef = useRef(false);
+  const [viewing, setViewing] = useState<ProteinStructure | null>(null);
 
   const handleResearchContextToggle = async () => {
     const opening = !rcExpanded;
@@ -1638,6 +1646,19 @@ function ProteinPanel({
                                   {structResult.structures.filter((x) => x.sourceDatabase === "pdb").length} experimental (PDB),{" "}
                                   {structResult.structures.filter((x) => x.sourceDatabase === "alphafold").length} predicted (AlphaFold). Experimental structures are ranked by coverage, then resolution.
                                 </p>
+                                {viewing && (
+                                  <div className="space-y-1 pb-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                                        3D: {viewing.sourceId}{viewing.instanceId ? ` · chain ${viewing.instanceId}` : ""}
+                                      </span>
+                                      <button type="button" onClick={() => setViewing(null)} className="ml-auto text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline">
+                                        Close viewer
+                                      </button>
+                                    </div>
+                                    <ProteinStructureViewer key={`${viewing.sourceId}-${viewing.instanceId ?? ""}`} fileUrl={viewing.fileUrl} instanceId={viewing.instanceId} />
+                                  </div>
+                                )}
                                 {(structShowAll ? structResult.structures : structResult.structures.slice(0, 20)).map((st: ProteinStructure, i: number) => {
                                   const isPdb = st.sourceDatabase === "pdb";
                                   const isIsoform = !isPdb && /^AF-.+-\d+-F\d+$/.test(st.sourceId);
@@ -1685,6 +1706,13 @@ function ProteinPanel({
                                             : ""}
                                         </span>
                                       )}
+                                      <button
+                                        type="button"
+                                        onClick={() => setViewing(st)}
+                                        className="ml-auto text-[10px] px-1.5 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+                                      >
+                                        View 3D
+                                      </button>
                                       {!isPdb && st.confidenceScore !== null && (
                                         <span className="text-[10px] text-slate-500 dark:text-slate-400">
                                           pLDDT {st.confidenceScore.toFixed(1)}
