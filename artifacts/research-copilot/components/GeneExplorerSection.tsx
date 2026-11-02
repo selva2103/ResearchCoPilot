@@ -1717,6 +1717,29 @@ function ProteinPanel({
     RCSB 3D view ↗
   </a>
 )}
+<select
+  aria-label="Download structure file"
+  defaultValue=""
+  onChange={(e) => {
+    const f = e.target.value;
+    if (!f) return;
+    const v = /model_v(\d+)/.exec(st.fileUrl)?.[1];
+    window.open(
+      `/api/protein/structure/download?db=${st.sourceDatabase}&id=${encodeURIComponent(st.sourceId)}&format=${encodeURIComponent(f)}${v ? `&version=${v}` : ""}`,
+      "_blank"
+    );
+    e.target.value = "";
+  }}
+  className="text-[10px] px-1 py-0.5 rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800"
+>
+  <option value="">Download…</option>
+  {(isPdb
+    ? [["cif", "mmCIF (.cif)"], ["pdb", "PDB (.pdb)"], ["bcif", "BinaryCIF (.bcif)"], ["cif.gz", "mmCIF gzip (.cif.gz)"], ["pdb.gz", "PDB gzip (.pdb.gz)"]]
+    : [["cif", "mmCIF (.cif)"], ["pdb", "PDB (.pdb)"], ["bcif", "BinaryCIF (.bcif)"]]
+  ).map(([v, l]) => (
+    <option key={v} value={v}>{l}</option>
+  ))}
+</select>
                                       {!isPdb && st.confidenceScore !== null && (
                                         <span className="text-[10px] text-slate-500 dark:text-slate-400">
                                           pLDDT {st.confidenceScore.toFixed(1)}
