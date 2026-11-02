@@ -61,7 +61,7 @@ import { sortTranscripts } from "@/types/transcript-record";
 import type { ModuleResult } from "@/types/module-result";
 import { buildModuleResult, toModuleError } from "@/types/module-result";
 import { GENE_RATE_DELAY_MS, sleep } from "@/lib/gene/search";
-import { fetchGeneTable, fetchManeInfo } from "./fetch";
+import { fetchGeneTable, fetchManeInfo, noGeneTableReason } from "./fetch";
 import { parseGeneTable } from "./parser";
 
 // ── Options ───────────────────────────────────────────────────────────────────
@@ -161,12 +161,18 @@ export async function searchTranscripts(
     );
 
     if (records.length === 0) {
-      if (cache) cache.set(geneId, []);
+      // NCBI states explicitly when a gene has no gene_table (for example mitochondrial
+      // genes such as MT-CO1). Pass NCBI's own sentence through; do not cache that case
+      // so the reason is not lost on a cached hit.
+      const noTableReason = noGeneTableReason(tableText);
+      if (cache && !noTableReason) cache.set(geneId, []);
       return buildModuleResult({
         module: "transcript-explorer",
         status: "empty",
         data: [],
-        error: null,
+        error: noTableReason
+          ? { code: "NO_ANNOTATED_TRANSCRIPTS", message: noTableReason }
+          : null,
         startedAt,
       });
     }
