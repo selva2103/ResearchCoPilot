@@ -1634,6 +1634,12 @@ function ProteinPanel({
                                 ⚠️ Predicted models (AlphaFold) are temporarily unavailable.
                               </p>
                             )}
+{structResult.sourceStatuses.alphafold === "empty" && structResult.structures.length > 0 && (
+  <p className="text-xs text-slate-400 dark:text-slate-500 italic">No AlphaFold model is available for this protein.</p>
+)}
+{structResult.sourceStatuses.pdb === "empty" && structResult.structures.length > 0 && (
+  <p className="text-xs text-slate-400 dark:text-slate-500 italic">No experimental (PDB) structures are available for this protein.</p>
+)}
                             {structResult.structureAvailability === "none" && (
                               <p className="text-xs text-slate-400 dark:text-slate-500 italic">
                                 No 3D structures are available for this protein.
@@ -1646,19 +1652,6 @@ function ProteinPanel({
                                   {structResult.structures.filter((x) => x.sourceDatabase === "pdb").length} experimental (PDB),{" "}
                                   {structResult.structures.filter((x) => x.sourceDatabase === "alphafold").length} predicted (AlphaFold). Experimental structures are ranked by coverage, then resolution.
                                 </p>
-                                {viewing && (
-                                  <div className="space-y-1 pb-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                                        3D: {viewing.sourceId}{viewing.instanceId ? ` · chain ${viewing.instanceId}` : ""}
-                                      </span>
-                                      <button type="button" onClick={() => setViewing(null)} className="ml-auto text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline">
-                                        Close viewer
-                                      </button>
-                                    </div>
-                                    <ProteinStructureViewer key={`${viewing.sourceId}-${viewing.instanceId ?? ""}`} fileUrl={viewing.fileUrl} instanceId={viewing.instanceId} />
-                                  </div>
-                                )}
                                 {(structShowAll ? structResult.structures : structResult.structures.slice(0, 20)).map((st: ProteinStructure, i: number) => {
                                   const isPdb = st.sourceDatabase === "pdb";
                                   const isIsoform = !isPdb && /^AF-.+-\d+-F\d+$/.test(st.sourceId);
@@ -1666,8 +1659,9 @@ function ProteinPanel({
                                     ? `https://www.rcsb.org/structure/${st.sourceId}`
                                     : `https://alphafold.ebi.ac.uk/entry/${st.uniprotAccession}`;
                                   return (
-                                    <div
-                                      key={`${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}
+<div key={`row-${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}>
+<div
+ key={`${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}
                                       className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 py-0.5"
                                     >
                                       <span
@@ -1719,9 +1713,23 @@ function ProteinPanel({
                                         </span>
                                       )}
                                     </div>
-                                  );
-                                })}
-                                {!structShowAll && structResult.structures.length > 20 && (
+{viewing === st && (
+  <div className="space-y-1 py-1 w-full">
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+        3D: {st.sourceId}{st.instanceId ? ` · chain ${st.instanceId}` : ""}
+      </span>
+      <button type="button" onClick={() => setViewing(null)} className="ml-auto text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline">
+        Close viewer
+      </button>
+    </div>
+    <ProteinStructureViewer key={`${st.sourceId}-${st.instanceId ?? ""}`} fileUrl={st.fileUrl} instanceId={st.instanceId} />
+  </div>
+)}
+</div>
+);
+})}
+{!structShowAll && structResult.structures.length > 20 && (
                                   <button
                                     type="button"
                                     onClick={() => setStructShowAll(true)}

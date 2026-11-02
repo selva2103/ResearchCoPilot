@@ -58,7 +58,11 @@ export default function ProteinStructureViewer({
                 s
               );
               const loci = StructureSelection.toLociWithSourceUnits(sel);
-              if (loci.elements.length > 0) ui.managers.camera.focusLoci(loci);
+              if (loci.elements.length > 0) {
+                  ui.managers.structure.selection.fromLoci("add", loci);
+                  ui.managers.camera.focusLoci(loci);
+                  setNote(`Whole entry shown; chain ${instanceId} is selected and centred.`);
+                }
               else setNote(`Chain ${instanceId} not found in this file; showing the whole entry.`);
             }
           } catch {
