@@ -1707,6 +1707,16 @@ function ProteinPanel({
                                       >
                                         View 3D
                                       </button>
+{isPdb && (
+  <a
+    href={`https://www.rcsb.org/3d-view/${st.sourceId}`}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/40"
+  >
+    RCSB 3D view ↗
+  </a>
+)}
                                       {!isPdb && st.confidenceScore !== null && (
                                         <span className="text-[10px] text-slate-500 dark:text-slate-400">
                                           pLDDT {st.confidenceScore.toFixed(1)}
