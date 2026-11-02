@@ -432,6 +432,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             : isHumanGene
             ? transcriptResult.data.some((t) => t.isCanonical === true)
             : null,
+          emptyReason:
+            transcriptResult.error?.code === "NO_ANNOTATED_TRANSCRIPTS"
+              ? transcriptResult.error.message
+              : null,
         },
       };
     }

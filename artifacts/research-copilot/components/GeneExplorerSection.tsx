@@ -442,7 +442,7 @@ function TranscriptExplorer({
   gene: GeneRecord;
   normalizedQuery: NormalizedQuery | null;
 }) {
-  const { available, count, records, maneSelectPresent } = gene.transcripts;
+  const { available, count, records, maneSelectPresent, emptyReason } = gene.transcripts;
   const isHumanGene = gene.taxonomyId === "9606";
 
   // Accordion state — at most one transcript row expanded at a time.
@@ -567,7 +567,9 @@ function TranscriptExplorer({
       {/* Empty state — fetch succeeded but zero transcripts */}
       {records !== null && records.length === 0 && (
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          No RefSeq transcripts found for this gene.
+          {emptyReason
+            ? `NCBI reports: ${emptyReason}`
+            : "No RefSeq transcripts found for this gene."}
         </p>
       )}
 
