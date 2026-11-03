@@ -6,6 +6,7 @@ import type {
   InteractionResolutionResult,
   ProteinInteractionPartner,
 } from "@/types/protein-interaction";
+import StringNetworkExplorer from "@/components/StringNetworkExplorer";
 
 /**
  * Phase 5.9A - Protein Interactions (STRING). Lazy: nothing is fetched until the
@@ -193,6 +194,14 @@ export default function ProteinInteractionPanel({
                     <PartnerRow key={p.partnerStringId} p={p} />
                   ))}
                 </div>
+              )}
+              {result.queryProtein && (
+                <StringNetworkExplorer
+                  queryStringId={result.queryProtein.stringId}
+                  partnerStringIds={result.partners.map((p) => p.partnerStringId)}
+                  taxonomyId={taxonomyId}
+                  minScore={result.minScore}
+                />
               )}
               {result.availability !== "source-failure" && result.identifierStatus === "resolved" && result.stringMappingStatus === "resolved" && (
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
