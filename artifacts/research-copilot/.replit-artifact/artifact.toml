@@ -11,7 +11,7 @@ kind = "web"
 
     [[services]]
     name = "web"
-    paths = ["/", "/api/analyze", "/api/pubmed-test", "/api/transcript/download", "/api/transcript/summary", "/api/protein/summaries", "/api/protein/detail", "/api/protein/download", "/api/protein/research-context", "/api/variant/list", "/api/clinical-evidence", "/api/gene/fasta", "/api/variant/research-context", "/api/gene/go", "/api/gene/pathways", "/api/protein/domains", "/api/protein/structure"]
+    paths = ["/", "/api/analyze", "/api/pubmed-test", "/api/transcript/download", "/api/transcript/summary", "/api/protein/summaries", "/api/protein/detail", "/api/protein/download", "/api/protein/research-context", "/api/variant/list", "/api/clinical-evidence", "/api/gene/fasta", "/api/variant/research-context", "/api/gene/go", "/api/gene/pathways", "/api/protein/domains", "/api/protein/structure", "/api/protein/structure/download", "/api/protein/search-by-name", "/api/protein/lookup"]
     localPort = 5000
 
     [services.development]

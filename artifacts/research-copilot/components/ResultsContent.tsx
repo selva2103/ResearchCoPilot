@@ -1668,7 +1668,7 @@ function ResultSection({
         <span className="text-xl">{icon}</span>
         <h3 className="font-semibold text-white text-base">{title}</h3>
         <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${c.badge}`}>
-          {items.length} found
+          Sample
         </span>
       </div>
       <ul className="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -1681,7 +1681,7 @@ function ResultSection({
       </ul>
       <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700/50">
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          Powered by AI — {itemType}s generated for your query
+          Sample preview — placeholder {itemType}s shown for layout, not generated from your query
         </p>
       </div>
     </div>
