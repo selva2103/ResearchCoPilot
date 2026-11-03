@@ -269,12 +269,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // resolver and so pagination stays aligned with the initial-load query.
   let resolution: NormalizedQuery | null = null;
   let geneAdapterResolution: QueryResolution | null = null;
+  let resolvedGeneId: string | undefined;
+  let skipUnresolvedSymbol = false;
   let effectiveQuery: string;
 
   if (isInitialLoad) {
     resolution = await resolveQuery(query);
     geneAdapterResolution = buildGeneAdapterResolution(resolution);
     effectiveQuery = deriveEffectiveQuery(resolution, query);
+    // Gene ID from a HIGH-confidence resolution: Sequence Foundation uses it directly
+    // instead of re-searching the symbol text (aliases can match other genes).
+    const resolvedId = resolution.gene?.geneId;
+    if (resolution.confidence >= 0.9 && typeof resolvedId === "string" && /^\d+$/.test(resolvedId)) {
+      resolvedGeneId = resolvedId;
+    }
+    // Unresolved hyphenated single token (e.g. HLA-1, T-cell): raw free-text gene search
+    // returns unrelated genes, so skip gene-level modules. Not applied when the resolver
+    // was degraded (NCBI outage), where the old behaviour is kept.
+    const resolverDegraded = (resolution as unknown as { degraded?: unknown }).degraded;
+    if (
+      !resolverDegraded &&
+      !resolution.gene && !resolution.organism && !resolution.disease && !resolution.protein &&
+      /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+){1,2}$/.test(query.trim())
+    ) {
+      skipUnresolvedSymbol = true;
+    }
   } else {
     // Load More: use the resolvedQuery the frontend passes back (from initial response).
     // Falls back to originalQuery if not provided or malformed (backward compatibility).
@@ -358,7 +377,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let sequencesError: string | undefined;
 
   if (isInitialLoad) {
-    const seqResult = await searchSequenceResources(effectiveQuery);
+    const seqResult = skipUnresolvedSymbol
+      ? { data: [] as SequenceResource[], error: null }
+      : await searchSequenceResources(effectiveQuery, { geneId: resolvedGeneId });
     sequences = seqResult.data;
     sequencesError = seqResult.error?.message;
   }
@@ -377,7 +398,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let genesMeta: PaginationMeta | null = null;
   let genesError: string | undefined;
 
-  if (runGenes) {
+  if (runGenes && !skipUnresolvedSymbol) {
     const geneResult = await searchGeneExplorer(effectiveQuery, {
       limit,
       offset: genesOffset,

@@ -57,10 +57,11 @@ import { parseAssemblyRecord, parseNucCoreRecord, parseGeneRecord } from "./pars
 // ── Rule 3: Gene-symbol resolution ───────────────────────────────────────────
 
 async function resolveGeneSymbol(
-  geneSymbol: string
+  geneSymbol: string,
+  knownGeneId?: string
 ): Promise<SequenceResource[]> {
   // Step 1: gene ESearch → gene_id
-  const { geneId } = await searchGene(geneSymbol);
+  const geneId = knownGeneId ?? (await searchGene(geneSymbol)).geneId;
 
   // Step 2: gene ESummary → gene metadata
   await sleep(RATE_DELAY_MS);
@@ -209,7 +210,8 @@ async function resolveAccession(
  * The sequence module always runs on the initial load and is NOT triggered on Load More.
  */
 export async function searchSequenceResources(
-  query: string
+  query: string,
+  options: { geneId?: string } = {}
 ): Promise<ModuleResult<SequenceResource>> {
   const startedAt = performance.now();
 
@@ -218,11 +220,11 @@ export async function searchSequenceResources(
   try {
     let resources: SequenceResource[];
 
-    if (queryType === "gene-symbol") {
+    if (options.geneId || queryType === "gene-symbol") {
       // Uppercase the symbol before querying NCBI Gene ESearch.
       // "TP53[Gene Name]" returns 1 exact hit; "tp53[Gene Name]" returns thousands of
       // substring matches. Using uppercase gives the same precision as the gene resolver.
-      resources = await resolveGeneSymbol(query.trim().toUpperCase());
+      resources = await resolveGeneSymbol(query.trim().toUpperCase(), options.geneId);
     } else if (queryType === "accession") {
       resources = await resolveAccession(query.trim());
     } else {
