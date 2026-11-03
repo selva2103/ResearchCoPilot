@@ -91,7 +91,7 @@ export default function StringNetworkExplorer({
 }) {
   const [open, setOpen] = useState(false);
   const [flavor, setFlavor] = useState<Flavor>("evidence");
-  const [interactive, setInteractive] = useState(false);
+  const [interactive, setInteractive] = useState(true);
   const [embedState, setEmbedState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [embedError, setEmbedError] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
@@ -146,6 +146,12 @@ export default function StringNetworkExplorer({
             caller_identity: CALLER,
           });
           setEmbedState("ready");
+          window.setTimeout(() => {
+            if (!cancelled && node && node.childElementCount === 0) {
+              setEmbedState("error");
+              setEmbedError("The STRING embed did not draw a network.");
+            }
+          }, 8000);
         })
         .catch((e: unknown) => {
           if (cancelled) return;
@@ -271,7 +277,7 @@ export default function StringNetworkExplorer({
 
           {hasNetwork && (
             <>
-              <div className="rounded bg-white p-1 overflow-x-auto">
+              <div className={"rounded bg-white p-1 overflow-x-auto" + (interactive && embedState !== "error" ? " hidden" : "")}>
                 {imgFailed ? (
                   <p className="text-xs text-amber-600 italic p-2">
                     ⚠️ The network image could not be loaded from STRING. Use the links above.
@@ -291,11 +297,11 @@ export default function StringNetworkExplorer({
               <div className="space-y-1.5">
                 {!interactive ? (
                   <button type="button" onClick={() => setInteractive(true)} className={btnCls}>
-                    Load interactive network (STRING embed)
+                    Switch to interactive network
                   </button>
                 ) : (
                   <button type="button" onClick={() => setInteractive(false)} className={btnCls}>
-                    Close interactive network
+                    Switch to static image
                   </button>
                 )}
                 {interactive && embedState === "loading" && (
@@ -361,7 +367,32 @@ export default function StringNetworkExplorer({
                             {analysis.goProcess.map((t) => (
                               <tr key={t.term} className="border-t border-slate-100 dark:border-slate-700/40">
                                 <td className="pr-2 py-0.5">
-                                  {t.description} <span className="font-mono text-[10px] text-slate-400">{t.term}</span>
+                                  {/^GO:\d{7}$/.test(t.term) ? (
+                                    <>
+                                      <a
+                                        href={"https://amigo.geneontology.org/amigo/term/" + t.term}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title="Open this GO term in AmiGO"
+                                        className="text-indigo-700 dark:text-indigo-400 hover:underline"
+                                      >
+                                        {t.description}
+                                      </a>{" "}
+                                      <a
+                                        href={"https://www.ebi.ac.uk/QuickGO/term/" + t.term}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title="Open this GO term in QuickGO"
+                                        className="font-mono text-[10px] text-slate-400 hover:underline"
+                                      >
+                                        {t.term}
+                                      </a>
+                                    </>
+                                  ) : (
+                                    <>
+                                      {t.description} <span className="font-mono text-[10px] text-slate-400">{t.term}</span>
+                                    </>
+                                  )}
                                 </td>
                                 <td className="pr-2 py-0.5">{t.genesInNetwork}</td>
                                 <td className="pr-2 py-0.5">{t.genesInBackground}</td>
