@@ -43,6 +43,7 @@ import type { ProteinStructure, StructureResolutionResult } from "@/types/protei
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
+import ProteinInteractionPanel from "@/components/ProteinInteractionPanel";
 
 // Mol* is heavy and browser-only: load on demand, never on the server.
 const ProteinStructureViewer = dynamic(() => import("@/components/ProteinStructureViewer"), {
@@ -1780,6 +1781,16 @@ function ProteinPanel({
                   </div>
                 )}
               </div>
+
+              {/* Protein Interactions (Phase 5.9A) - STRING, lazy; RefSeq NP_/XP_ proteins only */}
+              {/^(NP_|XP_)\d+\.\d+$/.test(displayRecord.proteinAccessionVersion) && (
+                <ProteinInteractionPanel
+                  accession={displayRecord.proteinAccessionVersion}
+                  geneId={displayRecord.geneId}
+                  organism={displayRecord.organism}
+                  taxonomyId={geneRecord.taxonomyId}
+                />
+              )}
 
               {/* Loading detail */}
               {detailLoading && (
