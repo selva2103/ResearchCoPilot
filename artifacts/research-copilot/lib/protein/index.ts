@@ -4,7 +4,7 @@
  * Public API (Phase 5.4A — unchanged):
  *   getProteinsForTranscripts(transcripts) → Promise<ModuleResult<ProteinRecord>>
  *     Filters to coding transcripts with a non-null proteinAccessionVersion,
- *     fetches ESummary for all of them in a single NCBI call, and returns
+ *     fetches ESummary for all of them (in chunks of 100 accessions), and returns
  *     one ProteinRecord per transcript (in the same order as the input array).
  *
  *   getProteinDetail(proteinAccessionVersion, baseRecord) → Promise<ModuleResult<ProteinRecord>>
@@ -20,7 +20,7 @@
  *     Results are cached in-process by researchcontext:protein:{accessionVersion} key.
  *
  * NCBI call accounting for Phase 5.4A:
- *   getProteinsForTranscripts: 1 call (batched ESummary — regardless of gene size)
+ *   getProteinsForTranscripts: 1 call per 100 accessions (batched ESummary; most genes need only 1)
  *   getProteinDetail:          1 call (single GenPept EFetch — on-demand)
  *   FASTA download:            1 call (single FASTA EFetch — via download route)
  *
@@ -64,7 +64,7 @@ import {
  * Algorithm:
  *   1. Filter transcripts to those with a non-null proteinAccessionVersion.
  *   2. Collect unique accession versions (preserve first-seen order).
- *   3. Fetch ESummary for all in a single NCBI call.
+ *   3. Fetch ESummary for all in chunks of 100 accessions (one NCBI call per chunk).
  *   4. Build ProteinRecord[] by pairing each ESummary entry with its parent transcript.
  *   5. Return in the same order as the input transcripts array.
  *
@@ -105,7 +105,7 @@ export async function getProteinsForTranscripts(
   }
 
   try {
-    // Step 3 — Single batched ESummary call for all protein accessions.
+    // Step 3 — Batched ESummary in chunks of 100 accessions (see fetchProteinSummaries).
     const summaryMap = await fetchProteinSummaries(uniqueAccessions);
 
     // Step 4 — Build ProteinRecord[] in input transcript order.

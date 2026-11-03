@@ -3,7 +3,7 @@
  *
  * Two public fetchers:
  *   fetchProteinSummaries(accessionVersions)
- *     Batch ESummary for all proteins in a gene (single NCBI call).
+ *     Batch ESummary for all proteins in a gene (one NCBI call per chunk of 100 accessions).
  *     NCBI protein ESummary accepts accession.version strings directly as `id`
  *     (confirmed with NP_000537.3 — returns UID 120407068 and full summary).
  *     No UID-resolution step is needed; the accession.version → UID mapping
@@ -17,7 +17,7 @@
  *   calls. These functions do NOT insert delays internally.
  *
  * Entrez calls added by Phase 5.4A:
- *   Transcript list expand (all proteins in gene): +1 (batched ESummary)
+ *   Transcript list expand (all proteins in gene): +1 per 100 proteins (batched ESummary)
  *   Protein sub-panel expand (one protein):        +1 (GenPept EFetch)
  *   FASTA download (one protein):                  +1 (FASTA EFetch)
  */
