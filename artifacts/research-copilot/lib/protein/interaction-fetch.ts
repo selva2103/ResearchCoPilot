@@ -106,7 +106,7 @@ function makeLimiter(delayMs: number) {
 
 const withStringLimit = makeLimiter(STRING_DELAY_MS);
 
-async function fetchStringJson<T>(method: string, params: Record<string, string>): Promise<T> {
+export async function fetchStringJson<T>(method: string, params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams({ ...params, caller_identity: CALLER_IDENTITY });
   const url = `${STRING_API_BASE}/${method}?${qs.toString()}`;
   return withStringLimit(async () => {
@@ -123,7 +123,7 @@ async function fetchStringJson<T>(method: string, params: Record<string, string>
 let versionCache: { value: string; fetchedAt: number } | null = null;
 
 /** STRING release string (informational). Never throws; null when unavailable. */
-async function getStringVersion(): Promise<string | null> {
+export async function getStringVersion(): Promise<string | null> {
   if (versionCache && Date.now() - versionCache.fetchedAt < CACHE_TTL_MS) return versionCache.value;
   try {
     const rows = await fetchStringJson<Array<{ string_version?: string }>>("version", {});
