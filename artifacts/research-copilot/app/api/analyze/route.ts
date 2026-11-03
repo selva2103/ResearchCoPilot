@@ -290,7 +290,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (
       !resolverDegraded &&
       !resolution.gene && !resolution.organism && !resolution.disease && !resolution.protein &&
-      /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+){1,2}$/.test(query.trim())
+      (/^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+){1,2}$/.test(query.trim()) ||
+        /^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2})$/i.test(query.trim()) ||
+        /^[1-9][A-Za-z0-9]{3}$/.test(query.trim()))
     ) {
       skipUnresolvedSymbol = true;
     }
