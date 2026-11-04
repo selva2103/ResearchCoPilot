@@ -1,6 +1,6 @@
 # Phase 5.9 Final Report: Protein-Protein Interaction Explorer (STRING)
 
-Branch: phase-5.9-ppi-explorer (from phase-5.8a-complete). HEAD 452f546, pushed to origin.
+Branch: phase-5.9-ppi-explorer (from phase-5.8a-complete). Code last changed in the licence label commit listed under Commits; tag phase-5.9-complete.
 
 ## Scope
 - 5.9A: POST /api/protein/interactions (STRING interaction partners; RefSeq to UniProt to STRING ID; minimum score 0.4 / 0.7 / 0.9) and the Protein Interactions panel, mounted after Protein Structure.
@@ -18,6 +18,7 @@ Branch: phase-5.9-ppi-explorer (from phase-5.8a-complete). HEAD 452f546, pushed 
 - YP_ accession: the route rejects YP_003024028.1 with "Invalid or missing protein accession (expected NP_/XP_ versioned accession)". The HTTP status code was not seen.
 - Code review of lib/protein/interaction-fetch.ts: failures return sourceStatus "error" / availability "source-failure" before writeCache, so errors are never cached; only unresolved, empty and success results are cached; fetchWithRetry retries HTTP 429 only (2 retries, 1.5 s then 3 s); AbortSignal.timeout of 25 s is one budget per STRING call; the limiter keeps working after a failure; getStringVersion never throws and returns null on failure.
 - The 5.9 diff touches no file under lib/resolver.
+- scripts/regression_matrix.ts at 0eeff49 (code identical to 452f546): 95 checks, 0 failures, REGRESSION MATRIX PASSED (run twice, same result).
 
 ## Reported in earlier sessions (output seen by the earlier agent, not in this session)
 - 4d3de1b: BRCA1 returns 368 records in 6.1 s with order kept; BRCA2, TP53, EGFR, TTN, DMD unchanged.
@@ -34,10 +35,9 @@ Branch: phase-5.9-ppi-explorer (from phase-5.8a-complete). HEAD 452f546, pushed 
 - The interactive embed loads an external script from string-db.org; if it fails, the static image and links still work.
 - Human mitochondrial genes (e.g. MT-CO1, resolved as COX1) have no transcripts or proteins in the app, so they get no interactions panel. YP_ proteins are not supported (route accepts NP_/XP_ only).
 - Search box keeps the old text after a partner click (same open item as 5.8A).
-- STRING licence label is not shown yet: pending the exact wording from STRING's licence page.
+- STRING data is licensed CC BY 4.0 (credit STRING, indicate changes; confirmed on STRING's licence page on 4 November 2026). The interactions panel footer shows Data: STRING, its version and (CC BY 4.0). Material from other resources that STRING displays stays under those resources' own terms.
 
 ## Not verified
-- Regression matrix (95 checks, as in the 5.8A report) at 452f546.
 - Browser console and CORS output for the interactive embed after 6decc50.
 - Retry buttons and error messages of the network analysis section in the browser.
 - Non-human organism in the browser (mouse Trp53 checked at API level only).
@@ -46,7 +46,7 @@ Branch: phase-5.9-ppi-explorer (from phase-5.8a-complete). HEAD 452f546, pushed 
 ## User-reported only (no output or screenshot)
 - Opening a second protein's interactions closes the previous network.
 
-## Commits phase-5.8a-complete..HEAD (oldest first)
+## Commits phase-5.8a-complete..452f546 (oldest first)
 c0e32eb feat(interactions): STRING interaction partners API and panel component (not yet mounted)
 be39af8 feat(interactions): mount STRING protein interactions panel after Protein Structure
 4d3de1b fix(protein): split protein ESummary into chunks of 100 accessions (HTTP 414 for genes with 300+ proteins, e.g. BRCA1)
@@ -55,6 +55,8 @@ be39af8 feat(interactions): mount STRING protein interactions panel after Protei
 6decc50 feat(interactions): interactive STRING network by default with static fallback; GO terms link to AmiGO and QuickGO
 452f546 docs(protein): update comments for chunked protein ESummary (100 accessions per call)
 
-## Diffstat phase-5.8a-complete..HEAD
+Later commits: 0eeff49 (this report and the 5.8A report); the licence label commit (STRING data licence CC BY 4.0 shown in the panel footer, text only).
+
+## Diffstat phase-5.8a-complete..452f546
  12 files changed, 1419 insertions(+), 7 deletions(-)
 END OF REPORT
