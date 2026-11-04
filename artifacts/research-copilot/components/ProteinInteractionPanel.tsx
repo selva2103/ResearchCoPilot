@@ -205,7 +205,7 @@ export default function ProteinInteractionPanel({
               )}
               {result.availability !== "source-failure" && result.identifierStatus === "resolved" && result.stringMappingStatus === "resolved" && (
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
-                  Data: STRING{result.stringVersion ? ` v${result.stringVersion}` : ""}. Edges are functional associations and are not
+                  Data: STRING{result.stringVersion ? ` v${result.stringVersion}` : ""} (CC BY 4.0). Edges are functional associations and are not
                   necessarily physical binding. Only human partners are clickable (a search, not a confirmed match).
                 </p>
               )}
