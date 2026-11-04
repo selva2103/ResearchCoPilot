@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { GeneRecord } from "@/types/gene-record";
 import type { DrugCandidate, DrugTargetResult } from "@/types/drug-target";
 import { stageLabel } from "@/lib/drug-target/stages";
+import DrugIndications from "@/components/DrugIndications";
+import TractabilityBlock from "@/components/TractabilityBlock";
 
 /**
  * Phase 5.10A - Drugs and clinical candidates (Open Targets). Gene-level, human only.
@@ -49,6 +51,7 @@ function CandidateRow({ c }: { c: DrugCandidate }) {
           {more > 0 && <li>+{more} more mechanisms</li>}
         </ul>
       )}
+      <DrugIndications chemblId={c.chemblId} />
     </div>
   );
 }
@@ -198,6 +201,9 @@ export default function DrugTargetPanel({ gene }: { gene: GeneRecord }) {
       {expanded && (
         <div className="mt-2 space-y-2">
           {content}
+          {isHuman && ensemblId && (
+            <TractabilityBlock ensemblId={ensemblId} geneId={gene.geneId} taxonomyId={String(gene.taxonomyId)} />
+          )}
           {showFooter && result && (
             <p className="text-[10px] text-slate-400 dark:text-slate-500">
               Data: Open Targets Platform{result.dataVersion ? ` ${result.dataVersion}` : ""} (CC0 1.0). Drug

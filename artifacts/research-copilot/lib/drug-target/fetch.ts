@@ -65,7 +65,7 @@ function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-function parseDataVersion(meta: unknown): string | null {
+export function parseDataVersion(meta: unknown): string | null {
   const dv = obj(obj(meta)?.dataVersion);
   if (!dv) return null;
   const year = str(dv.year);
@@ -196,7 +196,7 @@ export function isDrugTargetCached(ensemblId: string): boolean {
 
 // -- public entry point -------------------------------------------------------
 
-async function fetchOpenTargets(query: string): Promise<unknown> {
+export async function fetchOpenTargets(query: string): Promise<unknown> {
   return withOpenTargetsLimit(async () => {
     const res = await fetchWithRetry(OPEN_TARGETS_URL, {
       method: "POST",
