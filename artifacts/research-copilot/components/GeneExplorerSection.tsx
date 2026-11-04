@@ -44,6 +44,7 @@ import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
 import ProteinInteractionPanel from "@/components/ProteinInteractionPanel";
+import DrugTargetPanel from "@/components/DrugTargetPanel";
 
 // Mol* is heavy and browser-only: load on demand, never on the server.
 const ProteinStructureViewer = dynamic(() => import("@/components/ProteinStructureViewer"), {
@@ -435,6 +436,7 @@ function GeneCard({
         <VariantExplorerSection gene={gene} />
       )}
       {isPrimary && <BiologicalFunctionPanel gene={gene} />}
+      {isPrimary && <DrugTargetPanel gene={gene} />}
     </div>
   );
 }
