@@ -29,6 +29,10 @@ export interface DrugCandidate {
   rowStage: string | null;
   drugStage: string | null;
   mechanisms: DrugMechanism[];
+  /** Validated DrugBank IDs from Open Targets crossReferences (added in 5.10C). */
+  drugbankIds?: string[];
+  /** Validated Probes&Drugs IDs from Open Targets crossReferences (added in 5.10C). */
+  probesDrugsIds?: string[];
 }
 
 export interface DrugTargetResult {
@@ -40,4 +44,6 @@ export interface DrugTargetResult {
   dataVersion: string | null;
   totalCount: number;
   candidates: DrugCandidate[];
+  /** Reviewed UniProt accession of the target (uniprot_swissprot), when Open Targets returns one (5.10C). */
+  uniprotId?: string | null;
 }

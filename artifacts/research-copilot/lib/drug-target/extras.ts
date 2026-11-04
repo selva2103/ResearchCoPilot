@@ -34,7 +34,7 @@ function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-function makeCache<T>() {
+export function makeCache<T>() {
   const map = new Map<string, { data: T; at: number }>();
   return {
     read(key: string): T | null {

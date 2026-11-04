@@ -127,12 +127,6 @@ export default function TractabilityBlock({
     <div className="pt-2 mt-2 border-t border-slate-100 dark:border-slate-700/40">
       <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Tractability (Open Targets)</p>
       {body}
-      {state === "done" && result && (result.availability === "available" || result.availability === "none") && (
-        <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">
-          Data: Open Targets Platform{result.dataVersion ? ` ${result.dataVersion}` : ""} (CC0 1.0). Assessments are
-          computed by Open Targets.
-        </p>
-      )}
     </div>
   );
 }

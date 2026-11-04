@@ -11,6 +11,7 @@
 
 import { fetchWithRetry } from "@/lib/utils";
 import { stageRank } from "@/lib/drug-target/stages";
+import { UNIPROT_ACCESSION_RE, parseCrossReferences } from "@/lib/drug-target/links";
 import type { DrugCandidate, DrugMechanism, DrugTargetResult } from "@/types/drug-target";
 
 const OPEN_TARGETS_URL = "https://api.platform.opentargets.org/api/v4/graphql";
@@ -45,9 +46,9 @@ function buildQuery(ensemblId: string): string {
     throw new Error("buildQuery: invalid Ensembl gene ID");
   }
   return (
-    `{ target(ensemblId: "${ensemblId}") { id approvedSymbol ` +
+    `{ target(ensemblId: "${ensemblId}") { id approvedSymbol proteinIds { id source } ` +
     `drugAndClinicalCandidates { count rows { maxClinicalStage ` +
-    `drug { id name drugType maximumClinicalStage ` +
+    `drug { id name drugType maximumClinicalStage crossReferences { source ids } ` +
     `mechanismsOfAction { rows { mechanismOfAction actionType targetName } } } } } } ` +
     `meta { dataVersion { year month iteration } } }`
   );
@@ -88,7 +89,7 @@ function failureResult(ensemblId: string): DrugTargetResult {
 }
 
 /** Pure: maps a parsed Open Targets GraphQL response body to a DrugTargetResult. */
-export function classifyOpenTargetsResponse(ensemblId: string, body: unknown): DrugTargetResult {
+function classifyCore(ensemblId: string, body: unknown): DrugTargetResult {
   const failure = failureResult(ensemblId);
   const root = obj(body);
   if (!root) return failure;
@@ -157,6 +158,42 @@ export function classifyOpenTargetsResponse(ensemblId: string, body: unknown): D
     dataVersion,
     totalCount,
     candidates,
+  };
+}
+
+/**
+ * Pure: classifyCore plus the link data added in 5.10C (the target's reviewed UniProt accession and
+ * each drug's DrugBank / Probes&Drugs IDs). All IDs are validated by regex; a missing ID stays empty.
+ */
+export function classifyOpenTargetsResponse(ensemblId: string, body: unknown): DrugTargetResult {
+  const base = classifyCore(ensemblId, body);
+  if (base.availability === "source-failure") return base;
+  const target = obj(obj(obj(body)?.data)?.target);
+
+  let uniprotId: string | null = null;
+  for (const p of arr(target?.proteinIds)) {
+    const rec = obj(p);
+    const id = str(rec?.id);
+    if (str(rec?.source) === "uniprot_swissprot" && id && UNIPROT_ACCESSION_RE.test(id)) {
+      uniprotId = id;
+      break;
+    }
+  }
+
+  const xrefs = new Map<string, { drugbankIds: string[]; probesDrugsIds: string[] }>();
+  for (const raw of arr(obj(target?.drugAndClinicalCandidates)?.rows)) {
+    const drug = obj(obj(raw)?.drug);
+    const id = str(drug?.id);
+    if (drug && id) xrefs.set(id, parseCrossReferences(drug.crossReferences));
+  }
+
+  return {
+    ...base,
+    uniprotId,
+    candidates: base.candidates.map((c) => ({
+      ...c,
+      ...(xrefs.get(c.chemblId) ?? { drugbankIds: [], probesDrugsIds: [] }),
+    })),
   };
 }
 

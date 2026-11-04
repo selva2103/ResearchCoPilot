@@ -6,6 +6,8 @@ import type { DrugCandidate, DrugTargetResult } from "@/types/drug-target";
 import { stageLabel } from "@/lib/drug-target/stages";
 import DrugIndications from "@/components/DrugIndications";
 import TractabilityBlock from "@/components/TractabilityBlock";
+import DrugExternalLinks from "@/components/DrugExternalLinks";
+import { geneExternalLinks } from "@/lib/drug-target/links";
 
 /**
  * Phase 5.10A - Drugs and clinical candidates (Open Targets). Gene-level, human only.
@@ -51,6 +53,7 @@ function CandidateRow({ c }: { c: DrugCandidate }) {
           {more > 0 && <li>+{more} more mechanisms</li>}
         </ul>
       )}
+      <DrugExternalLinks candidate={c} />
       <DrugIndications chemblId={c.chemblId} />
     </div>
   );
@@ -125,7 +128,7 @@ export default function DrugTargetPanel({ gene }: { gene: GeneRecord }) {
         Drug target data is unavailable: no Ensembl gene ID was found for this gene.
       </p>
     );
-  } else if (state === "loading" || state === "idle") {
+  } else if (state === "loading" || state === "idle" || (result !== null && result.ensemblId !== ensemblId)) {
     content = <p className="text-xs text-slate-400 italic">Loading from Open Targets...</p>;
   } else if (state === "error" || !result) {
     content = (
@@ -182,8 +185,18 @@ export default function DrugTargetPanel({ gene }: { gene: GeneRecord }) {
     );
   }
 
+  const resultMatches = result !== null && result.ensemblId === ensemblId;
+  const geneLinks =
+    isHuman && ensemblId
+      ? geneExternalLinks({
+          ensemblId,
+          symbol: (resultMatches ? result?.approvedSymbol : null) ?? gene.officialSymbol,
+          uniprotId: resultMatches ? (result?.uniprotId ?? null) : null,
+        })
+      : [];
+
   const showFooter =
-    state === "done" && result && (result.availability === "available" || result.availability === "none");
+    state === "done" && result !== null;
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 dark:border-slate-700 p-3">
@@ -200,6 +213,24 @@ export default function DrugTargetPanel({ gene }: { gene: GeneRecord }) {
       </button>
       {expanded && (
         <div className="mt-2 space-y-2">
+          {geneLinks.length > 0 && (
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Gene links:{" "}
+              {geneLinks.map((l, i) => (
+                <span key={l.href}>
+                  {i > 0 ? " | " : ""}
+                  <a
+                    href={l.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-700 dark:text-indigo-400 hover:underline"
+                  >
+                    {l.label}
+                  </a>
+                </span>
+              ))}
+            </p>
+          )}
           {content}
           {isHuman && ensemblId && (
             <TractabilityBlock ensemblId={ensemblId} geneId={gene.geneId} taxonomyId={String(gene.taxonomyId)} />
@@ -207,7 +238,7 @@ export default function DrugTargetPanel({ gene }: { gene: GeneRecord }) {
           {showFooter && result && (
             <p className="text-[10px] text-slate-400 dark:text-slate-500">
               Data: Open Targets Platform{result.dataVersion ? ` ${result.dataVersion}` : ""} (CC0 1.0). Drug
-              records originate from ChEMBL (CC BY-SA 3.0, per Open Targets).{" "}
+              records originate from ChEMBL (CC BY-SA 3.0, per Open Targets). Tractability assessments are computed by Open Targets.{" "}
               <a
                 href={CITATION_URL}
                 target="_blank"
