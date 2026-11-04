@@ -46,6 +46,14 @@ import type { OrganismSynonymEntry } from "@/lib/resolver/organism-synonyms";
 // organism names ("SARS-CoV-2") or disease names ("Leukemia").
 const GENE_SYMBOL_RE = /^[A-Z][A-Z0-9]{1,12}$/;
 
+// Hyphenated official-symbol shape (HLA-A, MT-CO1, NKX2-1, HLA-DRB1).
+// NOTE: the bare pattern above still excludes hyphens. Hyphenated queries are
+// admitted ONLY as a whole string and ONLY when NCBI Gene returns a human
+// entry whose official symbol, nomenclature symbol or exact alias equals the
+// query. There is no
+// cross-species fallback. Keep identical to the copy in lib/resolver/index.ts.
+const HYPHEN_SYMBOL_RE = /^[A-Za-z][A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8}){1,2}$/;
+
 // ── NCBI raw response shapes ──────────────────────────────────────────────────
 
 interface GeneESearchResult {
@@ -66,6 +74,7 @@ interface GeneESummaryEntry {
     scientificname: string;
     taxid: number;
   };
+  nomenclaturesymbol?: string; // nomenclature-authority symbol (e.g. MT-CO1 for COX1); not set on every gene
   otheraliases?: string;   // comma-separated list of synonyms / aliases
   summary?: string;
 }
@@ -129,6 +138,19 @@ export async function resolveGene(
 ): Promise<Omit<QueryResolution, "originalQuery"> | null> {
   const trimmedOriginalCase = query.trim();
 
+  // Newly admitted alphabetic case variants require an exact official-symbol
+  // match in the human gene search only. No cross-species fallback is
+  // permitted for this path. Digit-containing inputs, already-uppercase
+  // inputs, and explicitly organism-qualified queries keep existing rules.
+  // Applies to ALL bare alphabetic queries, including all-caps ones such as
+  // "HIV", "DNA", "PCR", which otherwise fell through to the unrestricted
+  // cross-organism search and resolved to arbitrary non-human genes.
+  const isHyphenatedCandidate =
+    !detectedOrganism && HYPHEN_SYMBOL_RE.test(trimmedOriginalCase);
+  const requiresOfficialSymbolMatch =
+    !detectedOrganism &&
+    (/^[A-Za-z]{2,13}$/.test(trimmedOriginalCase) || isHyphenatedCandidate);
+
   // When called from the organism-prefix pre-step, bypass the uppercase-only
   // symbol guard — non-human gene symbols are often mixed-case (Trp53, Sox2).
   // When called from the normal pipeline (no detectedOrganism), also accept a
@@ -139,12 +161,12 @@ export async function resolveGene(
   // treated as human vs. non-human, only what's allowed to reach the checks.
   const isMixedCaseBareCandidate =
     !GENE_SYMBOL_RE.test(trimmedOriginalCase) &&
-    GENE_SYMBOL_RE.test(trimmedOriginalCase.toUpperCase()) &&
-    /\d/.test(trimmedOriginalCase);
+    GENE_SYMBOL_RE.test(trimmedOriginalCase.toUpperCase());
   if (
     !detectedOrganism &&
     !GENE_SYMBOL_RE.test(trimmedOriginalCase) &&
-    !isMixedCaseBareCandidate
+    !isMixedCaseBareCandidate &&
+    !isHyphenatedCandidate
   )
     return null;
 
@@ -165,7 +187,12 @@ export async function resolveGene(
   // EXACT, case-sensitive match to the query, from a non-human organism. If
   // found, that is preferred; otherwise (no confirmed exact-case gene) it falls
   // through unchanged to Step 1's existing human-first search.
-  if (!detectedOrganism && trimmedOriginalCase !== q && /^[A-Z]/.test(trimmedOriginalCase)) {
+  if (
+    !detectedOrganism &&
+    !requiresOfficialSymbolMatch &&
+    trimmedOriginalCase !== q &&
+    /^[A-Z]/.test(trimmedOriginalCase)
+  ) {
     // Check each known non-human model organism (the same canonical table
     // organism-prefix.ts already uses for explicit-organism detection — reused
     // here, not duplicated) via the identical taxId-filtered ESearch pattern
@@ -307,7 +334,22 @@ export async function resolveGene(
     await sleep(RESOLVER_RATE_DELAY_MS);
     const entries = await geneESummary(humanIds);
     const exact = entries.find((e) => exactSymbolMatch(e, q));
-    const best = exact ?? entries[0];
+    const hyphenHit = isHyphenatedCandidate
+      ? entries.find(
+          (e) => e.organism.taxid === 9606 && exactSymbolMatch(e, q)
+        ) ??
+        entries.find(
+          (e) =>
+            e.organism.taxid === 9606 &&
+            (buildAliases(e).some((a) => a.toUpperCase() === q) ||
+              (e.nomenclaturesymbol ?? "").toUpperCase() === q)
+        )
+      : undefined;
+    const best = isHyphenatedCandidate
+      ? hyphenHit
+      : requiresOfficialSymbolMatch
+      ? exact
+      : exact ?? entries[0];
 
     if (best) {
       const aliases = buildAliases(best);
@@ -350,6 +392,15 @@ export async function resolveGene(
         },
       };
     }
+  }
+
+  if (requiresOfficialSymbolMatch) {
+    // No exact official human symbol match — either Step 1 found no human
+    // hits at all, or found hits but none was an exact official symbol.
+    // A newly admitted alphabetic case variant must not fall through to the
+    // unrestricted cross-organism search below: that is how "purple" was
+    // previously resolving to an unrelated non-human gene.
+    return null;
   }
 
   // ── Step 2: Search without organism filter (non-human genes) ─────────────

@@ -65,7 +65,24 @@ export async function fetchGeneTable(geneId: string): Promise<string> {
     `${NCBI_BASE}/efetch.fcgi?db=gene` +
     `&id=${encodeURIComponent(geneId)}` +
     `&rettype=gene_table&retmode=text`;
-  return ncbiFetch(url, true) as Promise<string>;
+  const text = (await ncbiFetch(url, true)) as string;
+  // A genuine gene_table response always has a "Gene ID: <n>" header line, including the
+  // "no table for this gene" case. Anything else (an error page or truncated body served
+  // with HTTP 200) must not be parsed as "this gene has no transcripts".
+  if (!/^Gene ID:\s*\d+/m.test(text)) {
+    throw new Error("NCBI returned an unexpected gene_table response (no Gene ID header)");
+  }
+  return text;
+}
+
+/**
+ * NCBI's own explanation when a gene has no gene_table, for example
+ * "There is no table for this gene because it has no annotated transcribed products."
+ * Returns null for a normal table.
+ */
+export function noGeneTableReason(tableText: string): string | null {
+  const m = /^There is no table for this gene[^\r\n]*/im.exec(tableText);
+  return m ? m[0].trim() : null;
 }
 
 // ── MANE info (human genes only) ─────────────────────────────────────────────

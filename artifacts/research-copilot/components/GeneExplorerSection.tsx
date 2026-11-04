@@ -32,15 +32,24 @@
  */
 
 import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import type { GeneRecord } from "@/types/gene-record";
 import type { TranscriptRecord } from "@/types/transcript-record";
 import type { ProteinRecord } from "@/types/protein-record";
 import type { NormalizedQuery } from "@/types/normalized-query";
 import type { ProteinResearchContext } from "@/types/research-context";
 import type { ProteinDomain } from "@/types/protein-domain";
+import type { ProteinStructure, StructureResolutionResult } from "@/types/protein-structure";
 import type { ModuleResult } from "@/types/module-result";
 import VariantExplorerSection from "@/components/VariantExplorerSection";
 import BiologicalFunctionPanel from "@/components/BiologicalFunctionPanel";
+import ProteinInteractionPanel from "@/components/ProteinInteractionPanel";
+
+// Mol* is heavy and browser-only: load on demand, never on the server.
+const ProteinStructureViewer = dynamic(() => import("@/components/ProteinStructureViewer"), {
+  ssr: false,
+  loading: () => <p className="text-[10px] text-slate-400 italic">Loading 3D viewer…</p>,
+});
 
 // ─── PaginationMeta shape (mirrors API contract) ───────────────────────────────
 interface PaginationMeta {
@@ -441,7 +450,7 @@ function TranscriptExplorer({
   gene: GeneRecord;
   normalizedQuery: NormalizedQuery | null;
 }) {
-  const { available, count, records, maneSelectPresent } = gene.transcripts;
+  const { available, count, records, maneSelectPresent, emptyReason } = gene.transcripts;
   const isHumanGene = gene.taxonomyId === "9606";
 
   // Accordion state — at most one transcript row expanded at a time.
@@ -566,7 +575,9 @@ function TranscriptExplorer({
       {/* Empty state — fetch succeeded but zero transcripts */}
       {records !== null && records.length === 0 && (
         <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-          No RefSeq transcripts found for this gene.
+          {emptyReason
+            ? `NCBI reports: ${emptyReason}`
+            : "No RefSeq transcripts found for this gene."}
         </p>
       )}
 
@@ -1022,6 +1033,15 @@ function ProteinPanel({
   >(null);
   const domainsFetchedRef = useRef(false);
 
+  // ── Protein Structure (Phase 5.8A) — lazy, collapsed by default ────────────
+  const [structExpanded, setStructExpanded] = useState(false);
+  const [structResult, setStructResult] = useState<StructureResolutionResult | null>(null);
+  const [structLoading, setStructLoading] = useState(false);
+  const [structError, setStructError] = useState<string | null>(null);
+  const [structShowAll, setStructShowAll] = useState(false);
+  const structFetchedRef = useRef(false);
+  const [viewing, setViewing] = useState<ProteinStructure | null>(null);
+
   const handleResearchContextToggle = async () => {
     const opening = !rcExpanded;
     setRcExpanded((v) => !v);
@@ -1087,6 +1107,46 @@ function ProteinPanel({
         setDetailError("Network error — protein detail unavailable.");
       } finally {
         setDetailLoading(false);
+      }
+    }
+  };
+
+  const handleStructureToggle = async () => {
+    const opening = !structExpanded;
+    setStructExpanded((v) => !v);
+    if (opening && !structFetchedRef.current && proteinRecord) {
+      structFetchedRef.current = true;
+      setStructLoading(true);
+      setStructError(null);
+      try {
+        const res = await fetch("/api/protein/structure", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accession: proteinRecord.proteinAccessionVersion,
+            geneId: proteinRecord.geneId,
+            organism: proteinRecord.organism,
+          }),
+        });
+        const result = (await res.json()) as Partial<StructureResolutionResult> & {
+          error?: string;
+          rateLimited?: boolean;
+        };
+        if (res.status >= 400 || !result.structureAvailability) {
+          structFetchedRef.current = false; // allow retry on next open
+          setStructError(
+            result.rateLimited
+              ? "Rate limit hit — please try again in a moment."
+              : result.error ?? "Structure data unavailable."
+          );
+        } else {
+          setStructResult(result as StructureResolutionResult);
+        }
+      } catch {
+        structFetchedRef.current = false;
+        setStructError("Network error — structure data unavailable.");
+      } finally {
+        setStructLoading(false);
       }
     }
   };
@@ -1442,12 +1502,31 @@ function ProteinPanel({
 
                     {!domainsLoading && !domainsError && domains !== null && (
                       <>
-                        {/* Case A — identifier could not be resolved */}
-                        {domainsResolutionStatus !== "resolved" && (
+                        {/* Case A1 — zero reviewed UniProt entries (e.g. predicted XP_ proteins) */}
+                        {domainsResolutionStatus === "unresolved" && (
                           <p className="text-xs text-slate-400 dark:text-slate-500 italic">
-                            Protein identifier could not be resolved.
+                            No reviewed UniProt entry exists for this protein (common for
+                            computationally predicted proteins) — domain lookup requires a
+                            curated entry.
                           </p>
                         )}
+
+                        {/* Case A2 — multiple reviewed UniProt entries, ambiguous mapping */}
+                        {domainsResolutionStatus === "ambiguous" && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            This protein maps to multiple UniProt entries — domain lookup was
+                            skipped to avoid selecting the wrong one.
+                          </p>
+                        )}
+
+                        {/* Case A3 — identifier status unknown (defensive fallback) */}
+                        {domainsResolutionStatus !== "resolved" &&
+                          domainsResolutionStatus !== "unresolved" &&
+                          domainsResolutionStatus !== "ambiguous" && (
+                            <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                              Protein identifier could not be resolved.
+                            </p>
+                          )}
 
                         {/* Case B — resolved but no domains annotated */}
                         {domainsResolutionStatus === "resolved" && domains.length === 0 && (
@@ -1503,6 +1582,215 @@ function ProteinPanel({
                   </div>
                 )}
               </div>
+
+              {/* ── Protein Structure (Phase 5.8A) — expandable, lazy ── */}
+              <div className="rounded-md bg-slate-50 dark:bg-slate-900/40 border border-indigo-200 dark:border-indigo-800/60 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={handleStructureToggle}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                >
+                  <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-400 uppercase tracking-wide">
+                    🧬 Protein Structure
+                  </span>
+                  <span className="ml-auto text-slate-400 dark:text-slate-500 text-[11px]">
+                    {structExpanded ? "▲" : "▼"}
+                  </span>
+                </button>
+
+                {structExpanded && (
+                  <div className="px-2 pb-2 pt-0.5 border-t border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                    {structLoading && (
+                      <div className="flex items-center gap-1.5">
+                        <LoadingSpinner />
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          Loading structures (this can take up to ~20 s)…
+                        </span>
+                      </div>
+                    )}
+
+                    {!structLoading && structError && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 italic">⚠️ {structError}</p>
+                    )}
+
+                    {!structLoading && !structError && structResult && (
+                      <>
+                        {structResult.identifierStatus !== "resolved" && (
+                          <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                            No UniProt entry could be confidently resolved for this protein
+                            (no reviewed entry — common for predicted proteins — or multiple
+                            ambiguous matches) — no structure lookup was attempted.
+                          </p>
+                        )}
+
+                        {structResult.identifierStatus === "resolved" && (
+                          <>
+                            {structResult.sourceStatuses.pdb === "error" && (
+                              <p className="text-xs text-amber-600 dark:text-amber-400 italic">
+                                ⚠️ Experimental structures (PDB) are temporarily unavailable.
+                              </p>
+                            )}
+                            {structResult.sourceStatuses.alphafold === "error" && (
+                              <p className="text-xs text-amber-600 dark:text-amber-400 italic">
+                                ⚠️ Predicted models (AlphaFold) are temporarily unavailable.
+                              </p>
+                            )}
+{structResult.sourceStatuses.alphafold === "empty" && structResult.structures.length > 0 && (
+  <p className="text-xs text-slate-400 dark:text-slate-500 italic">No AlphaFold model is available for this protein.</p>
+)}
+{structResult.sourceStatuses.pdb === "empty" && structResult.structures.length > 0 && (
+  <p className="text-xs text-slate-400 dark:text-slate-500 italic">No experimental (PDB) structures are available for this protein.</p>
+)}
+                            {structResult.structureAvailability === "none" && (
+                              <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                No 3D structures are available for this protein.
+                              </p>
+                            )}
+
+                            {structResult.structures.length > 0 && (
+                              <div className="space-y-1">
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                                  {structResult.structures.filter((x) => x.sourceDatabase === "pdb").length} experimental (PDB),{" "}
+                                  {structResult.structures.filter((x) => x.sourceDatabase === "alphafold").length} predicted (AlphaFold). Experimental structures are ranked by coverage, then resolution.
+                                </p>
+                                {(structShowAll ? structResult.structures : structResult.structures.slice(0, 20)).map((st: ProteinStructure, i: number) => {
+                                  const isPdb = st.sourceDatabase === "pdb";
+                                  const isIsoform = !isPdb && /^AF-.+-\d+-F\d+$/.test(st.sourceId);
+                                  const href = isPdb
+                                    ? `https://www.rcsb.org/structure/${st.sourceId}`
+                                    : `https://alphafold.ebi.ac.uk/entry/${st.uniprotAccession}`;
+                                  return (
+<div key={`row-${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}>
+<div
+ key={`${st.sourceDatabase}-${st.sourceId}-${st.entityId ?? ""}-${st.instanceId ?? ""}-${i}`}
+                                      className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 py-0.5"
+                                    >
+                                      <span
+                                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                          isPdb
+                                            ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                                            : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                                        }`}
+                                      >
+                                        {isPdb ? "Experimental" : isIsoform ? "Predicted · isoform" : "Predicted"}
+                                      </span>
+                                      <a
+                                        href={href}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-mono text-indigo-700 dark:text-indigo-400 hover:underline"
+                                      >
+                                        {st.sourceId}
+                                      </a>
+                                      {isPdb && st.instanceId && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                          entity {st.entityId} · chain {st.instanceId}
+                                        </span>
+                                      )}
+                                      {st.method && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">{st.method}</span>
+                                      )}
+                                      {st.resolution !== null && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">{st.resolution} Å</span>
+                                      )}
+                                      {isPdb && st.coverageFraction !== null && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                          covers {Math.round(st.coverageFraction * 100)}%
+                                          {st.coverageStart !== null && st.coverageEnd !== null
+                                            ? ` (residues ${st.coverageStart}–${st.coverageEnd})`
+                                            : ""}
+                                        </span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => setViewing(st)}
+                                        className="ml-auto text-[10px] px-1.5 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+                                      >
+                                        View 3D
+                                      </button>
+{isPdb && (
+  <a
+    href={`https://www.rcsb.org/3d-view/${st.sourceId}`}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="text-[10px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/40"
+  >
+    RCSB 3D view ↗
+  </a>
+)}
+<select
+  aria-label="Download structure file"
+  defaultValue=""
+  onChange={(e) => {
+    const f = e.target.value;
+    if (!f) return;
+    const v = /model_v(\d+)/.exec(st.fileUrl)?.[1];
+    window.open(
+      `/api/protein/structure/download?db=${st.sourceDatabase}&id=${encodeURIComponent(st.sourceId)}&format=${encodeURIComponent(f)}${v ? `&version=${v}` : ""}`,
+      "_blank"
+    );
+    e.target.value = "";
+  }}
+  className="text-[10px] px-1 py-0.5 rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800"
+>
+  <option value="">Download…</option>
+  {(isPdb
+    ? [["cif", "mmCIF (.cif)"], ["pdb", "PDB (.pdb)"], ["bcif", "BinaryCIF (.bcif)"], ["cif.gz", "mmCIF gzip (.cif.gz)"], ["pdb.gz", "PDB gzip (.pdb.gz)"]]
+    : [["cif", "mmCIF (.cif)"], ["pdb", "PDB (.pdb)"], ["bcif", "BinaryCIF (.bcif)"]]
+  ).map(([v, l]) => (
+    <option key={v} value={v}>{l}</option>
+  ))}
+</select>
+                                      {!isPdb && st.confidenceScore !== null && (
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                                          pLDDT {st.confidenceScore.toFixed(1)}
+                                        </span>
+                                      )}
+                                    </div>
+{viewing === st && (
+  <div className="space-y-1 py-1 w-full">
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+        3D: {st.sourceId}{st.instanceId ? ` · chain ${st.instanceId}` : ""}
+      </span>
+      <button type="button" onClick={() => setViewing(null)} className="ml-auto text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline">
+        Close viewer
+      </button>
+    </div>
+    <ProteinStructureViewer key={`${st.sourceId}-${st.instanceId ?? ""}`} fileUrl={st.fileUrl} instanceId={st.instanceId} />
+  </div>
+)}
+</div>
+);
+})}
+{!structShowAll && structResult.structures.length > 20 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setStructShowAll(true)}
+                                    className="text-[11px] text-indigo-700 dark:text-indigo-400 hover:underline"
+                                  >
+                                    Show all {structResult.structures.length} structures
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Protein Interactions (Phase 5.9A) - STRING, lazy; RefSeq NP_/XP_ proteins only */}
+              {/^(NP_|XP_)\d+\.\d+$/.test(displayRecord.proteinAccessionVersion) && (
+                <ProteinInteractionPanel
+                  accession={displayRecord.proteinAccessionVersion}
+                  geneId={displayRecord.geneId}
+                  organism={displayRecord.organism}
+                  taxonomyId={geneRecord.taxonomyId}
+                />
+              )}
 
               {/* Loading detail */}
               {detailLoading && (

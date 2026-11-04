@@ -25,6 +25,28 @@ import {
 import type { QueryResolution } from "@/types/query-resolution";
 import { toConfidenceTier } from "@/types/query-resolution";
 
+/**
+ * Narrow, explicitly-scoped override for bare organism queries where live
+ * NCBI Taxonomy ranking is confirmed wrong and no synonym/commonname data
+ * exists to let exactTaxMatch self-correct (Phase R HIV fix, 2026-10-29).
+ *
+ * Confirmed live: ESearch "HIV" ranks "Simian-Human immunodeficiency virus"
+ * (TaxID 57667, an unrelated lab-constructed chimeric virus) and "Human
+ * immunodeficiency virus 3" (TaxID 35274) above the generic "Human
+ * immunodeficiency virus" species entry (TaxID 12721). None of the five
+ * candidate entries have any commonname/othernames data at all, so there is
+ * no synonym for exactTaxMatch to find — this is not a retmax/truncation
+ * issue, raising it would not fix this.
+ *
+ * Deliberately NOT merged into the shared ORGANISM_SYNONYMS table (used for
+ * organism-prefix/suffix detection): doing so would also change bare-query
+ * resolution for every existing entry there (cow, pig, mouse, human, etc.),
+ * which is out of scope for this fix.
+ */
+const BARE_ORGANISM_OVERRIDES: Record<string, { taxId: number; name: string }> = {
+  hiv: { taxId: 12721, name: "Human immunodeficiency virus" },
+};
+
 // ── Raw NCBI response shapes ──────────────────────────────────────────────────
 
 interface TaxESearchResult {
@@ -96,6 +118,25 @@ export async function resolveOrganism(
   query: string
 ): Promise<Omit<QueryResolution, "originalQuery"> | null> {
   const q = query.trim();
+
+  const override = BARE_ORGANISM_OVERRIDES[q.toLowerCase()];
+  if (override) {
+    return {
+      normalizedQuery: override.name,
+      queryType: "Organism",
+      confidence: 0.92,
+      confidenceTier: toConfidenceTier(0.92),
+      matchedProvider: "ncbi-taxonomy",
+      primaryIdentifier: String(override.taxId),
+      identifierScheme: "ncbi-taxonomy",
+      scientificName: override.name,
+      organism: override.name,
+      taxonomyId: String(override.taxId),
+      relationships: { organisms: [override.name] },
+      resolutionPath: "ncbi-taxonomy-override",
+      notes: `"${q}" resolved via a curated override — live NCBI Taxonomy ranking for this term does not reflect the intended organism.`,
+    };
+  }
 
   // ESearch — retmax=3 to detect ambiguity without over-fetching
   const searchUrl =

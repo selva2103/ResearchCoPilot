@@ -23,5 +23,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const resolution = await resolveQuery(body.query.trim());
+  if (resolution.degraded) {
+    return NextResponse.json(
+      { error: "Resolver temporarily unavailable; please retry." },
+      { status: 503 }
+    );
+  }
   return NextResponse.json(resolution, { status: 200 });
 }

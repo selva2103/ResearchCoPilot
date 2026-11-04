@@ -203,12 +203,15 @@ export interface GeneRecord {
    *                       when transcript search was not run for this record or failed.
    *   maneSelectPresent:  true/false once known for a human gene; null for non-human
    *                       genes (MANE does not apply) or when undetermined.
+   *   emptyReason:        NCBI's own explanation when it reports that the gene has no
+   *                       gene_table (e.g. mitochondrial genes); optional, usually absent.
    */
   transcripts: {
     available: boolean;
     count: number | null;
     records: TranscriptRecord[] | null;
     maneSelectPresent: boolean | null;
+    emptyReason?: string | null;
   };
 
   /**

@@ -79,18 +79,26 @@ const ORGANISM_SUFFIXES: {
 /**
  * Broader gene-symbol pattern for the stripped remainder.
  *
- * Intentionally allows mixed-case (Trp53, Sox2, lacZ, EGFR) because non-human gene
- * symbols often use mixed capitalisation (e.g. Mus musculus uses sentence-case: Trp53,
- * Brca1, Cdkn2a). The resolver's own GENE_SYMBOL_RE is uppercase-only — this broader
- * pattern is used only in the organism-prefix/suffix code path.
+ * Intentionally allows mixed-case (Trp53, Sox2, lacZ, EGFR) AND all-lowercase
+ * (shha, white, eve, ftz — real, official gene symbols under zebrafish and
+ * Drosophila nomenclature conventions) because non-human gene symbols are not
+ * restricted to the human ALL-CAPS convention. The resolver's own
+ * GENE_SYMBOL_RE is uppercase-only — this broader pattern is used only in the
+ * organism-prefix/suffix code path.
  *
- * Guard: at least one uppercase letter OR digit prevents lowercase common words like
- * "receptor" or "kinase" from being treated as gene symbols.
+ * No uppercase/digit guard here (Phase R Bug 1 fix, 2026-10-28): that guard
+ * previously rejected genuine all-lowercase non-human symbols like "shha" and
+ * "white" before they ever reached NCBI. Correctness is enforced downstream
+ * instead — the caller (index.ts) runs a real taxId-filtered NCBI Gene search
+ * for the stripped remainder against the matched organism, and a shape match
+ * here that is not a real gene (e.g. "mouse receptor") simply returns no
+ * results there, same end behavior as today, verified live rather than
+ * guessed from a regex heuristic.
  */
 const GENE_SYMBOL_RE_BROAD = /^[A-Za-z][A-Za-z0-9]{1,15}$/;
 
 function looksLikeGeneSymbol(s: string): boolean {
-  return GENE_SYMBOL_RE_BROAD.test(s) && /[A-Z0-9]/.test(s);
+  return GENE_SYMBOL_RE_BROAD.test(s);
 }
 
 /**
@@ -101,7 +109,7 @@ function looksLikeGeneSymbol(s: string): boolean {
  *   - The remainder after stripping the prefix is empty or too short (e.g. "mouse" alone)
  *   - The remainder contains spaces (e.g. "mouse tumor protein p53") — multi-word remainders
  *     are not gene symbols and should route through the normal pipeline
- *   - The remainder does not resemble a gene symbol (no uppercase letter or digit)
+ *   - The remainder is not a single alphanumeric token of 2-16 characters starting with a letter
  */
 export function detectOrganismPrefix(
   query: string
